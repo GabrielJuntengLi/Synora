@@ -1,0 +1,1338 @@
+setwd('/home/liangzr/Synora')
+
+library(tidyverse)
+library(tidytable)
+library(magrittr)
+library(dbscan)
+library(concaveman)
+library(ggplot2)
+library(survminer)
+library(ClusterR)
+
+# source('0.1.SYNORA_SCRIPT.R')
+source('0.Functions_Synora_Liangzr.R')
+source('0.Functions_FeatureDerivation.R')
+source('0.Functions_stats_dt.R')
+
+GeneratePalette <- function(COLORS, LENGTH, CAT = F) {
+  RESULT <- circlize::colorRamp2(colors = COLORS, breaks = 0:(length(COLORS) - 1))(0:(LENGTH - 1) / (LENGTH - 1) * (length(COLORS) - 1))
+  # RESULT <- RESULT %>% str_remove('FF$')
+  if (CAT) RESULT %>% paste0(collapse = "', '") %>% paste0("'", ., "'") %>% cat()
+  return(RESULT)
+}
+
+
+# Information ------
+INPUT_0 <- fread('./data/CRC_32763154_clusters_neighborhoods_markers.csv') %>% 
+  dplyr::group_by(`File Name`) %>% 
+  dplyr::mutate(Cell_ID = paste0(`File Name`, '_', sprintf('%04.f', dplyr::row_number()))) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::transmute(Image_ID = `File Name`, 
+                   Cell_ID, 
+                   X_position = `X:X`, 
+                   Y_position = `Y:Y`, 
+                   CT0 = ifelse(!is.na(ClusterName) & ClusterName == 'tumor cells', 'Cancer', 'TME') %>% 
+                     forcats::fct_relevel('Cancer', 'TME'), 
+                   CT1 = ClusterName, 
+                   CN = `neighborhood name`)
+
+ClinicalInfo_ROI <- fread('./data/ClinicalInfo_ROI_CRC.csv', check.names = T)
+ClinicalInfo_Pat <- fread('./data/ClinicalInfo_Pat_CRC.csv', check.names = T)
+
+# NEST_SPECIFICITY & BOUNDARY_SPECIFICITY ------
+for (param1 in seq(0.1, 0.4, 0.05)){
+  for (param2 in seq(0.1, 0.4, 0.05)){
+
+    RESULT_01 <- INPUT_0 %>%
+      # INPUT_0 %>% dplyr::mutate(CT0_2 = as.integer(CT0 == 'Cancer')) %>% dplyr::count(CT0, CT0_2)    ### test NA
+      dplyr::mutate(CT0 = ifelse(CT0 == 'Cancer', 1, 0)) %>%
+      dplyr::nest_by(Image_ID, .key = 'INPUT') %>%
+      tibble::rowid_to_column('Row_ID') %T>% {temp_nrow <<- nrow(.)} %>%
+      .[c(9, 13, 16, 129), ] %>%
+      dplyr::mutate(RESULT_Boundary = INPUT %T>%
+          {if (Row_ID %% 10 == 0)
+            message(format(Sys.time(), "%H:%M:%S"), ' Running GetBoundary [', Row_ID , '/', temp_nrow, ']: ', Image_ID)} %>%
+          GetBoundary(CELL_ID_COLUMN = 'Cell_ID',
+                      X_POSITION = 'X_position', Y_POSITION = 'Y_position',
+                      ANNO_COLUMN = 'CT0', ANNO_OF_INTEREST = 'Cancer',
+                      RADIUS = 'auto',
+                      NEST_SPECIFICITY = param1, BOUNDARY_SPECIFICITY = param2) %>% list()) %>%
+      dplyr::mutate(RESULT_Layer = RESULT_Boundary %T>%
+          {if (Row_ID %% 10 == 0)
+              message(format(Sys.time(), "%H:%M:%S"), ' Running GetGrid [', Row_ID , '/', temp_nrow, ']: ', Image_ID)} %>%
+          GetGrid(CELL_ID_COLUMN = 'Cell_ID',
+                  X_POSITION = 'X_position', Y_POSITION = 'Y_position',
+                  ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary') %>% list())
+
+    temp <- RESULT_01 %>%
+      # dplyr::filter(Layered) %>%
+      # dplyr::nest_by(Image_ID) %>%
+      dplyr::mutate(POLYGON = RESULT_Layer %>%
+                      dplyr::select(X_position, Y_position) %>%
+                      as.matrix() %>%
+                      concaveman::concaveman(concavity = 1) %>%
+                      dplyr::as_tibble() %>%
+                      dplyr::rename(x = V1, y = V2) %>%
+                      dplyr::mutate(y = -y) %>%
+                      list())
+
+    temp2 <- temp %>%
+      dplyr::mutate(data = INPUT %>% dplyr::left_join(RESULT_Layer) %>% list()) %>%
+      dplyr::mutate(PLOT_1 = {ggplot(data = data, aes(x = X_position, y = -Y_position, group = -1L, fill = CN)) +
+          ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+          geom_point(aes(color = as.character(CT0)), size = 0.3) +
+          coord_fixed(ratio = 1) +
+          ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) +
+          scale_fill_manual(values = c('#A2FC3C', '#36AAF9') %>%
+                              setNames(c('Tumor boundary', 'Bulk tumor')), na.value = '#CB2A04') +
+          scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                               setNames(c('0', '1'))) +
+          labs(title = paste0('Image_ID = ', Image_ID))} %>% list()) %>%
+      dplyr::mutate(PLOT_2 = {ggplot(data = data, aes(x = X_position, y = -Y_position, group = -1L, fill = CT0_2)) +
+          ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+          geom_point(aes(color = as.character(CT0)), size = 0.3) +
+          coord_fixed(ratio = 1) +
+          ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) +
+          scale_fill_manual(values = c('#A2FC3C', '#36AAF9', '#CB2A04') %>%
+                              setNames(c('Boundary', 'Nest', 'Outside'))) +
+          scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                               setNames(c('0', '1'))) +
+          labs(title = paste0('Image_ID = ', Image_ID))
+      } %>% list()) %>%
+      dplyr::mutate(PLOT = patchwork::wrap_plots(PLOT_1, PLOT_2, nrow = 1, guides = 'collect') %>% list())
+
+    pdf(paste0('./CRC/01.Comparison_Nest', param1, '_Boundary', param2, '.pdf'), height = 6, width = 14)
+    temp2$PLOT %>% purrr::map(print, .progress = T)
+    dev.off()
+  }
+}
+
+
+# Spatial Annotation ------
+RESULT_01 <- INPUT_0 %>% 
+  # INPUT_0 %>% dplyr::mutate(CT0_2 = as.integer(CT0 == 'Cancer')) %>% dplyr::count(CT0, CT0_2)    ### test NA
+  dplyr::mutate(CT0 = ifelse(CT0 == 'Cancer', 1, 0)) %>% 
+  dplyr::nest_by(Image_ID, .key = 'INPUT') %>% 
+  tibble::rowid_to_column('Row_ID') %T>% {temp_nrow <<- nrow(.)} %>% 
+  dplyr::mutate(RESULT_Boundary = INPUT %T>%
+                  {if (Row_ID %% 10 == 0) message(
+                    format(Sys.time(), "%H:%M:%S"), ' Running GetBoundary [', Row_ID , '/', temp_nrow, ']: ', Image_ID)} %>%
+                  GetBoundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', 
+                              ANNO_COLUMN = 'CT0', ANNO_OF_INTEREST = 'Cancer',
+                              RADIUS = 70, 
+                              NEST_SPECIFICITY = 0.4,
+                              BOUNDARY_SPECIFICITY = 0.1) %>% list()) %>% 
+  dplyr::mutate(RESULT_Layer = RESULT_Boundary %T>%
+                  {if (Row_ID %% 10 == 0) message(
+                    format(Sys.time(), "%H:%M:%S"), ' Running GetGrid [', Row_ID , '/', temp_nrow, ']: ', Image_ID)} %>%
+                  GetGrid(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', 
+                          ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary') %>% list()) %>% 
+  dplyr::mutate(RESULT = RESULT_Layer %T>%
+                  {if (Row_ID %% 10 == 0) message(
+                    format(Sys.time(), "%H:%M:%S"), ' Getting Final Result [', Row_ID , '/', temp_nrow, ']: ', Image_ID)} %>%
+                  purrr::when(exists("MinDistance", envir = as.environment(.)) ~ .,
+                              T ~ dplyr::mutate(., MinDistance = NA, MeanDistance = NA)) %>%
+                  dplyr::transmute(Cell_ID,
+                                   SA1 = CT0_2 %>%
+                                     forcats::fct_recode('Tumor' = 'Nest', 'LE' = 'Boundary', 'Stroma' = 'Outside') %>%
+                                     forcats::fct_expand('Stroma', 'LE', 'Tumor', 'Noise') %>%
+                                     forcats::fct_relevel('Stroma', 'LE', 'Tumor', 'Noise'),
+                                   MinDist2LE = ifelse(SA1 == 'Stroma', -MinDistance, MinDistance),
+                                   MeanDist2LE = ifelse(SA1 == 'Stroma', -MeanDistance, MeanDistance)) %>%
+                  dplyr::left_join(INPUT, ., by = 'Cell_ID') %>% list()) %>%
+  dplyr::ungroup()
+
+
+plot1data <- RESULT_01 %>% 
+  # dplyr::filter(Layered) %>%
+  # dplyr::nest_by(Image_ID) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(POLYGON = RESULT_Layer %>% 
+                  dplyr::select(X_position, Y_position) %>%
+                  # dplyr::select(X_position, Y_position) %T>% {print(.)} %>%
+                  as.matrix() %>%
+                  concaveman::concaveman(concavity = 1) %>%
+                  dplyr::as_tibble() %>%
+                  dplyr::rename(x = V1, y = V2) %>%
+                  dplyr::mutate(y = -y) %>%
+                  list())
+
+plot1data %>% dplyr::select(Image_ID, RESULT_Boundary) %>% tidyr::unnest() %>% dplyr::count(Image_ID, Radius)
+
+
+data4plot <- plot1data %>% 
+  dplyr::mutate(data = INPUT %>% dplyr::left_join(RESULT_Layer) %>% list()) %>%
+  dplyr::mutate(PLOT_1 = {ggplot(data = data, aes(x = X_position, y = -Y_position, group = -1L, fill = CN)) +
+      ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+      geom_point(aes(color = as.character(CT0)), size = 0.3) +
+      coord_fixed(ratio = 1) +
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) +
+      scale_fill_manual(values = c('#779120', '#1965B0') %>%
+                          setNames(c('Tumor boundary', 'Bulk tumor')), na.value = '#762A83') +
+      scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                           setNames(c('0', '1'))) +
+      labs(title = paste0('Image_ID = ', Image_ID))} %>% list()) %>% 
+  dplyr::mutate(PLOT_2 = {ggplot(data = data, aes(x = X_position, y = -Y_position, group = -1L, fill = CT0_2)) +
+      ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+      geom_point(aes(color = as.character(CT0)), size = 0.3) +
+      coord_fixed(ratio = 1) +
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) + 
+      scale_fill_manual(values = c('#779120', '#1965B0', '#762A83') %>%
+                          setNames(c('Boundary', 'Nest', 'Outside'))) +
+      scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                           setNames(c('0', '1'))) +
+      labs(title = paste0('Image_ID = ', Image_ID))
+  } %>% list()) %>% 
+  dplyr::mutate(PLOT = patchwork::wrap_plots(PLOT_1, PLOT_2, nrow = 1, guides = 'collect') %>% list())
+
+
+pdf('./CRC/01.All_Comparison_Nest0.4_Boundary0.1_Radius70.pdf', height = 6, width = 14)
+data4plot$PLOT %>% purrr::map(print, .progress = T)
+dev.off()
+
+
+# RESULT_01 %>% qs::qsave('./CRC/ALL_SA_Raw_Nest0.4_Boundary0.1_Radius70.qs')
+RESULT_01 <- qs::qread('./CRC/ALL_SA_Raw_Nest0.4_Boundary0.1_Radius70.qs')
+
+
+RESULT_02 <- RESULT_01 %>% 
+  dplyr::select(Image_ID, RESULT) %>%
+  tidyr::unnest(RESULT) %>% 
+  dplyr::mutate(dplyr::across(c(MinDist2LE, MeanDist2LE), 
+                              .names = '{.col}_Bin', 
+                              .fns = \(Dist, LayerThickness = 50, Layers_Tumor = 5, Layers_Stroma = 20) {
+                                ifelse(Dist >= 0, 
+                                       pmin(Dist %/% LayerThickness, Layers_Tumor), 
+                                       pmax(Dist %/% LayerThickness + 1, -Layers_Stroma))})) %>% 
+  dplyr::mutate(MinDist2LE_Bin = ifelse(SA1 == 'Noise', NA, MinDist2LE_Bin),
+                MeanDist2LE_Bin = ifelse(SA1 == 'Noise', NA, MeanDist2LE_Bin)) %>%
+  dplyr::mutate(Layer = MeanDist2LE_Bin)# %>% 
+
+# dplyr::relocate(LEVELS$Channel, .after = -1)
+
+RESULT_02 %>% dplyr::count(Layer) %>% print(n = nrow(.))
+
+
+# RESULT_02 %>% qs::qsave('./CRC/ALL_SA_Nest0.4_Boundary0.1_Radius70.qs')
+RESULT_02 <- qs::qread('./CRC/ALL_SA_Nest0.4_Boundary0.1_Radius70.qs')
+
+
+INPUT_LAYERED <- RESULT_02 %>%
+  dplyr::mutate(Layer_Anno = ifelse(is.na(MeanDist2LE), NA, 
+                                    ifelse(SA1 == 'Noise', 'Noise', paste0(SA1, ': ', as.character(Layer))))) %>%
+  dplyr::mutate(Layer_Anno = Layer_Anno %>% 
+                  forcats::fct_relevel(c(paste0("Stroma: ", seq(-20, 0, 1)),
+                                         'LE: 0',
+                                         paste0("Tumor: ", seq(0, 5, 1)),
+                                         'Noise')))
+
+pdf('./CRC/02.Layer_count_Nest0.4_Boundary0.1_Radius70.pdf', width = 9, height = 6)
+INPUT_LAYERED %>% 
+  dplyr::mutate(Layer_Anno = ifelse(is.na(MeanDist2LE), NA, 
+                                    ifelse(SA1 == 'Noise', 'Noise', Layer))) %>% 
+  dplyr::mutate(Layer_Anno = Layer_Anno %>% forcats::fct_relevel(c(-20:5, 'Noise'))) %>% 
+  dplyr::filter(!is.na(Layer_Anno)) %>% 
+  dplyr::count(Layer_Anno) %>% 
+  dplyr::as_tibble() %>% 
+  ggplot() +
+  geom_bar(aes(x = Layer_Anno, y = n, fill = Layer_Anno), stat = 'identity') +
+  coord_fixed(ratio  = 6e-5) +
+  ggprism::theme_prism(border = T, base_size = 10, base_fontface = 'plain') +
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.01)),
+                     # breaks = c(0, 1e5, 2e5),
+                     labels = function(x) parse(text = gsub("e[+]", "%*%10^", ifelse(x == 0, '0', scales::scientific_format()(x))))
+  ) +
+  scale_fill_manual(values = GeneratePalette(c("#762A83", '#779120', "#1965B0"), 44)) +
+  # theme_void() + 
+  theme(aspect.ratio = 0.5, 
+        legend.position = 'none',
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(y = NULL)
+INPUT_LAYERED %>% 
+  dplyr::filter(!is.na(Layer)) %>%
+  dplyr::mutate(Layer = as.character(Layer) %>% forcats::fct_relevel(as.character(-20:5))) %>% 
+  dplyr::count(Layer) %>% 
+  dplyr::as_tibble() %>% 
+  ggplot() +
+  geom_bar(aes(x = Layer, y = n, fill = Layer), stat = 'identity') +
+  coord_fixed(ratio  = 6e-5) +
+  ggprism::theme_prism(border = T, base_size = 10, base_fontface = 'plain') +
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.01)),
+                     # breaks = c(0, 1e5, 2e5),
+                     labels = function(x) parse(text = gsub("e[+]", "%*%10^", ifelse(x == 0, '0', scales::scientific_format()(x))))
+  ) +
+  scale_fill_manual(values = GeneratePalette(c("#762A83", '#779120', "#1965B0"), 44)) +
+  # theme_void() + 
+  theme(aspect.ratio = 0.5, 
+        legend.position = 'none',
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(y = NULL)
+dev.off()
+
+
+INPUT_LAYERED <- INPUT_LAYERED %>% 
+  dplyr::mutate(CT1 = CT1 %>% forcats::fct_relevel(
+    c('tumor cells', 'tumor cells / immune cells', 
+      'immune cells / vasculature', 'vasculature', 
+      'lymphatics', 'smooth muscle', 
+      'stroma', 'immune cells', 
+      'granulocytes', 'CD11b+ monocytes', 
+      'CD68+ macrophages', 
+      'CD11b+CD68+ macrophages', 'CD68+ macrophages GzmB+', 
+      'CD68+CD163+ macrophages', 'CD163+ macrophages', 
+      'CD11c+ DCs', 'NK cells', 
+      'CD3+ T cells', 'CD4+ T cells', 'CD4+ T cells GATA3+', 'CD4+ T cells CD45RO+', 
+      'Tregs', 'CD8+ T cells', 'B cells', 'plasma cells', 
+      'adipocytes', 'nerves', 'undefined', 'dirt'))) %>% 
+  dplyr::mutate(CT2 = CT1 %>% dplyr::case_match(
+    c('tumor cells') ~ 'Epithelial', 
+    c('immune cells / vasculature', 'vasculature') ~ 'Vasculature',
+    c('lymphatics', 'smooth muscle') ~ 'Endothelial', 
+    c('stroma') ~ 'Stroma', 
+    c('granulocytes') ~ 'Granulocyte',
+    c('CD11b+ monocytes') ~ 'Monocyte',
+    c('CD68+ macrophages', 'CD11b+CD68+ macrophages', 'CD68+ macrophages GzmB+') ~ 'M1', 
+    c('CD68+CD163+ macrophages', 'CD163+ macrophages') ~ 'M2', 
+    c('CD11c+ DCs') ~ 'DC',
+    c('NK cells') ~ 'NK',
+    c('CD4+ T cells', 'CD4+ T cells GATA3+', 'CD4+ T cells CD45RO+') ~ 'CD4_Tconv', 
+    c('Tregs') ~ 'CD4_Treg',
+    c('CD8+ T cells') ~ 'CD8_T',
+    c('CD3+ T cells') ~ 'DNT',
+    c('B cells') ~ 'B cell',
+    c('plasma cells') ~ 'Plasma cell',
+    c('adipocytes') ~ 'Adipocyte', 
+    c('nerves') ~ 'Nerve',
+    c('tumor cells / immune cells', 'immune cells') ~ 'TME_Immune',
+    c('undefined', 'dirt') ~ 'TME_Unknown'
+  )  %>% forcats::fct_relevel(c('Epithelial', 'Vasculature', 'Endothelial', 
+                                'Stroma', 'Granulocyte', 'Monocyte', 'M1', 'M2',
+                                'DC', 'NK', 'CD4_Tconv', 'CD4_Treg', 'CD8_T', 'DNT', 
+                                'B cell', 'Plasma cell', 'Adipocyte', 'Nerve',
+                                'TME_Immune', 'TME_Unknown')))
+
+# INPUT_LAYERED %>% qs::qsave('./CRC/ALL_SA_Layered_Nest0.4_Boundary0.1_Radius70.qs')
+INPUT_LAYERED <- qs::qread('./CRC/ALL_SA_Layered_Nest0.4_Boundary0.1_Radius70.qs')
+
+
+pdf('./CRC/03.Layer_cells_Nest0.4_Boundary0.1_Radius70.pdf', width = 12, height = 6)
+INPUT_LAYERED %>% 
+  dplyr::filter(!is.na(Layer)) %>%
+  dplyr::mutate(Layer = as.character(Layer) %>% forcats::fct_relevel(as.character(-20:5))) %>% 
+  dplyr::filter(!CT1 %in% c('dirt')) %>% 
+  dplyr::count(Layer, CT1) %>% 
+  dplyr::group_by(Layer) %>% 
+  dplyr::mutate(prop = n / sum(n)) %>% 
+  dplyr::ungroup() %>% 
+  ggplot() +
+  geom_bar(aes(x = Layer, y = prop, fill = as.factor(CT1)), stat = 'identity') +
+  coord_fixed(ratio  = 6e-5) +
+  ggprism::theme_prism(border = T, base_size = 10, base_fontface = 'plain') +
+  theme(aspect.ratio = 0.5, 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  scale_fill_manual(values = c('#005F73', 
+                               '#04707F', '#0A9396',
+                               '#9B9B7A', '#baa587', '#d9ae94', '#d08c60', '#b58463',
+                               '#E9D8A6', '#ECCE90', '#EFC479', '#F0B962', '#F0AF4A', '#EFA52F', '#EE9B00') %>% 
+                      GeneratePalette(27) %>% c('grey')) + 
+  guides(fill = guide_legend(ncol = 2)) +
+  labs(y = NULL)
+INPUT_LAYERED %>% 
+  dplyr::filter(!is.na(Layer)) %>%
+  dplyr::mutate(Layer = as.character(Layer) %>% forcats::fct_relevel(as.character(-20:5))) %>% 
+  dplyr::filter(!CT1 %in% c('tumor cells', 'dirt')) %>% 
+  dplyr::count(Layer, CT2) %>% 
+  dplyr::group_by(Layer) %>% 
+  dplyr::mutate(prop = n / sum(n)) %>% 
+  dplyr::ungroup() %>% 
+  ggplot() +
+  geom_bar(aes(x = Layer, y = prop, fill = as.factor(CT2)), stat = 'identity') +
+  coord_fixed(ratio  = 6e-5) +
+  ggprism::theme_prism(border = T, base_size = 10, base_fontface = 'plain') +
+  theme(aspect.ratio = 0.5, 
+        # legend.position = 'none',
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  scale_fill_manual(values = c(#'#005F73', 
+    '#04707F', '#0A9396',
+    '#9B9B7A', '#baa587', '#d9ae94', '#d08c60', '#b58463',
+    '#E9D8A6', '#ECCE90', '#EFC479', '#F0B962', '#F0AF4A', '#EFA52F', '#EE9B00') %>% 
+      GeneratePalette(26) %>% c('grey')) + 
+  guides(fill = guide_legend(ncol = 2)) +
+  labs(y = NULL)
+dev.off()
+
+
+# Survival Only Diffuse ------
+temp_Feature <- qs::qread('./CRC/ALL_SA_Layered_Nest0.4_Boundary0.1_Radius70.qs') %>% 
+  dplyr::mutate(CT1 = paste0('CT1_', CT1)) %>% 
+  dplyr::mutate(CT2 = paste0('CT2_', CT2)) %>% 
+  dplyr::left_join(ClinicalInfo_ROI %>% dplyr::transmute(Image_ID = ImageID, Pat_ID = Patient, TissueType)) %>% 
+  dplyr::filter(TissueType == 'Diffuse') %>%
+  {dplyr::bind_rows(
+    Helper1(., 'Pat_ID', 'SA1'),
+    Helper1(., 'Pat_ID', 'CT1'),
+    Helper1(., 'Pat_ID', 'CT2'),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = T),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = T),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = F),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = F),
+  )} %>% 
+  dplyr::mutate(Value  = ifelse(Prop4Filter >= 0.01 | is.na(Prop4Filter), Value, 0)) %>% 
+  dplyr::filter(!Feature %>% str_detect('Noise'))
+
+
+temp_SurvivalResult <- temp_Feature %>% 
+  dplyr::left_join(ClinicalInfo_Pat, by = c('Pat_ID' = 'Patient')) %>%
+  dplyr::filter(Group == 2) %>% 
+  # dplyr::filter(Group == 'diffuse inflammatory infiltration (DII)') %>% 
+  {dplyr::mutate(INPUT = list(.), tidyr::expand_grid(
+    INTERACTIVE_COLUMN = c(NA, 'PostOP_Therapy'), 
+    SURVIVAL_TYPE = c('DFS', 'OS'#, 'OS', 'LRRFS'
+    ), 
+    CUTOFF = c('median', 'best')), 
+    VERBOSE = 0,
+  )} %>% 
+  dplyr::mutate(MESSAGE = paste0(INTERACTIVE_COLUMN, '; ', SURVIVAL_TYPE, '; ', CUTOFF)) %>% 
+  {dplyr::mutate(., RESULT = purrr::pmap(., GetSurvival))}
+
+
+pdf('./CRC/04.All_Survival_OnlyDiffuse_Nest0.4_Boundary0.1_Radius70.pdf', width = 18, height = 13)
+temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(!Feature %>% str_detect('dirt')) %>% 
+  dplyr::filter(!Feature %>% str_detect('Unknown')) %>% 
+  dplyr::filter(!Feature %>% str_detect('undefined')) %>% 
+  dplyr::filter(p_coxph < 0.05) %>% 
+  dplyr::arrange(Interactive, Survival, Cutoff, p_coxph) %>% 
+  dplyr::left_join(temp_Feature %>% dplyr::distinct(FeatureGroup, Feature, Term_A, Term_B, RelativeTo)) %>% 
+  dplyr::filter(!Interactive) %>% 
+  ggplot(aes(x = Term_B, y = Term_A, fill = log10(HR)))  +
+  facet_grid(Survival + Cutoff ~ FeatureGroup, scales = 'free', space = 'free') +
+  geom_tile(aes()) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+  scale_x_discrete(expand = expansion()) +
+  scale_y_discrete(expand = expansion()) +
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 12) +
+  theme(legend.title = element_text(),
+        legend.title.align = 0)
+dev.off()
+
+pdf('./CRC/05.Select_Survival_OnlyDiffuse_Nest0.4_Boundary0.1_Radius70.pdf', width = 8, height = 5)
+temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(!Feature %>% str_detect('dirt')) %>% 
+  dplyr::filter(!Feature %>% str_detect('Unknown')) %>% 
+  dplyr::filter(!Feature %>% str_detect('undefined')) %>% 
+  dplyr::filter(p_coxph < 0.05) %>% 
+  dplyr::arrange(Interactive, Survival, Cutoff, p_coxph) %>% 
+  dplyr::left_join(temp_Feature %>% dplyr::distinct(FeatureGroup, Feature, Term_A, Term_B, RelativeTo)) %>% 
+  dplyr::filter(!Interactive) %>% 
+  dplyr::filter(!Feature %>% str_detect('CT2')) %>% 
+  dplyr::filter(!(is.na(RelativeTo) & !is.na(Term_B))) %>% 
+  ggplot(aes(x = Term_B, y = Term_A, fill = log10(HR)))  +
+  facet_grid(Survival + Cutoff ~ FeatureGroup, scales = 'free', space = 'free') +
+  geom_tile(aes()) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+  scale_x_discrete(expand = expansion()) +
+  scale_y_discrete(expand = expansion()) +
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 12) +
+  theme(legend.title = element_text(),
+        legend.title.align = 0)
+temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(!Feature %>% str_detect('dirt')) %>% 
+  dplyr::filter(!Feature %>% str_detect('Unknown')) %>% 
+  dplyr::filter(!Feature %>% str_detect('undefined')) %>% 
+  dplyr::filter(p_coxph < 0.05) %>% 
+  dplyr::arrange(Interactive, Survival, Cutoff, p_coxph) %>% 
+  dplyr::left_join(temp_Feature %>% dplyr::distinct(FeatureGroup, Feature, Term_A, Term_B, RelativeTo)) %>% 
+  dplyr::filter(!Interactive) %>% 
+  dplyr::filter(Feature %>% str_detect('CT2')) %>% 
+  dplyr::filter(!(is.na(RelativeTo) & !is.na(Term_B))) %>% 
+  ggplot(aes(x = Term_B, y = Term_A, fill = log10(HR)))  +
+  facet_grid(Survival + Cutoff ~ FeatureGroup, scales = 'free', space = 'free') +
+  geom_tile(aes()) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+  scale_x_discrete(expand = expansion()) +
+  scale_y_discrete(expand = expansion()) +
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 12) +
+  theme(legend.title = element_text(),
+        legend.title.align = 0)
+  # dplyr::filter(Feature != 'CT1_vasculature;Stroma') %>% 
+  # dplyr::filter(Feature != 'CT2_Vasculature;Stroma') %>% 
+  # dplyr::filter(!Interactive) %>% 
+  # print(n = nrow(.))
+dev.off()
+
+
+# Group Compare Only Diffuse ------
+ClinicalInfo_Pat <- fread('./data/ClinicalInfo_Pat_CRC.csv', check.names = T) %>%
+  dplyr::mutate(Group = Group %>% dplyr::case_match(
+    c(1) ~ "Crohn's like reaction (CLR)", 
+    c(2) ~ "diffuse inflammatory infiltration (DII)"
+    )  %>% forcats::fct_relevel(c("Crohn's like reaction (CLR)", "diffuse inflammatory infiltration (DII)")),
+    Age_Group = ifelse(Age <= median(Age), 
+                       paste0('Age <= ', median(Age)), paste0('Age > ', median(Age))) 
+                       %>% forcats::fct_relevel(c(paste0('Age <= ', median(Age)), 
+                                                  paste0('Age > ', median(Age))))
+    )
+
+temp_list <- c('Group', 
+               'Sex', 'Age_Group', 
+               'Full_Histology', 
+               'Simple_Tumor_Location', 
+               'cp_TNM_Simple',
+               'Budding.grade', 
+               'MSI_IHC')
+
+temp_result_list <- list()
+temp_plot_list <- list()
+
+for (i in temp_list) {
+  
+  if (i == 'MSI_IHC') {
+    tmp_ClinicalInfo_Pat <- ClinicalInfo_Pat %>% filter(MSI_IHC != 'nd')
+  } else {
+    tmp_ClinicalInfo_Pat <- ClinicalInfo_Pat
+  }
+  
+  temp_Wilcox <- temp_Feature %>%
+    dplyr::left_join(tmp_ClinicalInfo_Pat %>% dplyr::rename(Pat_ID = Patient)) %>%
+    dplyr::group_by(Feature) %>%
+    dplyr::group_split() %>% 
+    purrr::map_dfr(~ {
+      data <- .
+      if (n_distinct(data[[i]]) > 2) {
+        tryCatch(
+          rstatix::pairwise_wilcox_test(
+            data = data,
+            formula = as.formula(paste0('Value ~ ', i)),
+            comparisons = combn(unique(tmp_ClinicalInfo_Pat[[i]]), 2) %>% split(., col(.)),
+            p.adjust.method = "BH"
+          ) %>% 
+            dplyr::mutate(Feature = unique(data$Feature)), 
+          error = function(e) tibble::tibble(Feature = unique(data$Feature), Error = e$message)
+        )
+      } else {
+        tryCatch(
+          rstatix::wilcox_test(
+            data = data,
+            formula = as.formula(paste0('Value ~ ', i))
+          ) %>% 
+            dplyr::mutate(Feature = unique(data$Feature)), 
+          error = function(e) tibble::tibble(Feature = unique(data$Feature), Error = e$message)
+        )
+      }
+    })
+    
+  temp_ES <- temp_Feature %>% 
+    dplyr::left_join(tmp_ClinicalInfo_Pat %>% dplyr::rename(Pat_ID = Patient)) %>% 
+    dplyr::group_by(Feature) %>% 
+    rstatix::cohens_d(as.formula(paste0('Value ~ ', i)))
+
+  temp_result_list[[i]] <- temp_Wilcox %>% 
+    dplyr::select(Feature, group1, group2, n1, n2, p) %>% 
+    dplyr::left_join(temp_ES %>% dplyr::select(Feature, group1, group2, n1, n2, effsize, magnitude))
+  
+  if (n_distinct(tmp_ClinicalInfo_Pat[[i]]) > 2) {
+    temp_plot_list[[i]] <- temp_result_list[[i]] %>% 
+      dplyr::left_join(temp_Feature) %>% 
+      rstatix::add_significance(symbols = c("****", "***", "**", "*", "")) %>% 
+      dplyr::filter(!is.na(p)) %>% 
+      dplyr::group_by(group1, group2) %>%
+      dplyr::group_split() %>%
+      purrr::map(~ {
+          data <- .
+          ggplot(data, aes(y = Term_A, x = Term_B, fill = effsize)) +
+            facet_wrap(. ~ FeatureGroup, scales = 'free', nrow = 2) +
+            geom_tile() +
+            geom_text(aes(label  = p.signif)) +
+            scale_fill_gradient2(
+              name = paste0(i, '\n',
+                            'group1: ', data$group1, '\n',
+                            'group2: ', data$group2),
+              low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+            ggprism::theme_prism(base_fontface = 'plain', base_size = 12) +
+            theme(legend.title = element_text(),
+                  legend.title.align = 0)} %>% list())
+  } else {
+    temp_plot_list[[i]] <- temp_result_list[[i]] %>% 
+      dplyr::left_join(temp_Feature) %>%
+      rstatix::add_significance(symbols = c("****", "***", "**", "*", "")) %>%
+      ggplot(aes(y = Term_A, x = Term_B, fill = effsize)) +
+      facet_wrap(. ~ FeatureGroup, scales = 'free', nrow = 2) +
+      geom_tile() +
+      geom_text(aes(label  = p.signif)) +
+      scale_fill_gradient2(
+        name = paste0(i, '\n',
+                      'group1: ', temp_result_list[[i]]$group1, '\n',
+                      'group2: ', temp_result_list[[i]]$group2),
+        low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+      ggprism::theme_prism(base_fontface = 'plain', base_size = 12) +
+      theme(legend.title = element_text(),
+            legend.title.align = 0)
+  }
+  
+}
+
+pdf('./CRC/06.All_Group_Freq_Comparison_OnlyDiffuse_Nest0.4_Boundary0.1_Radius70.pdf', height = 13, width = 25)
+temp_plot_list
+dev.off()
+
+
+# Survival LA Diffuse ------
+temp_Feature <- qs::qread('./CRC/ALL_SA_Layered_Nest0.4_Boundary0.1_Radius70.qs') %>% 
+  dplyr::mutate(CT1 = paste0('CT1_', CT1)) %>% 
+  dplyr::mutate(CT2 = paste0('CT2_', CT2)) %>% 
+  dplyr::left_join(ClinicalInfo_ROI %>% dplyr::transmute(Image_ID = ImageID, Pat_ID = Patient, TissueType)) %>% 
+  # dplyr::filter(TissueType == 'Diffuse') %>%
+  {dplyr::bind_rows(
+    Helper1(., 'Pat_ID', 'SA1'),
+    Helper1(., 'Pat_ID', 'CT1'),
+    Helper1(., 'Pat_ID', 'CT2'),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = T),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = T),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = F),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = F),
+  )} %>% 
+  dplyr::mutate(Value  = ifelse(Prop4Filter >= 0.01 | is.na(Prop4Filter), Value, 0)) %>% 
+  dplyr::filter(!Feature %>% str_detect('Noise'))
+
+
+temp_SurvivalResult <- temp_Feature %>% 
+  dplyr::left_join(ClinicalInfo_Pat, by = c('Pat_ID' = 'Patient')) %>%
+  # dplyr::filter(Group == 2) %>% 
+  # dplyr::filter(Group == 'diffuse inflammatory infiltration (DII)') %>% 
+  {dplyr::mutate(INPUT = list(.), tidyr::expand_grid(
+    INTERACTIVE_COLUMN = c(NA, 'PostOP_Therapy'), 
+    SURVIVAL_TYPE = c('DFS', 'OS'#, 'OS', 'LRRFS'
+    ), 
+    CUTOFF = c('median', 'best')), 
+    VERBOSE = 0,
+  )} %>% 
+  dplyr::mutate(MESSAGE = paste0(INTERACTIVE_COLUMN, '; ', SURVIVAL_TYPE, '; ', CUTOFF)) %>% 
+  {dplyr::mutate(., RESULT = purrr::pmap(., GetSurvival))}
+
+
+pdf('./CRC/07.All_Survival_LA_Diffuse_Nest0.4_Boundary0.1_Radius70.pdf', width = 18, height = 13)
+temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(!Feature %>% str_detect('dirt')) %>% 
+  dplyr::filter(!Feature %>% str_detect('Unknown')) %>% 
+  dplyr::filter(!Feature %>% str_detect('undefined')) %>% 
+  dplyr::filter(p_coxph < 0.05) %>% 
+  dplyr::arrange(Interactive, Survival, Cutoff, p_coxph) %>% 
+  dplyr::left_join(temp_Feature %>% dplyr::distinct(FeatureGroup, Feature, Term_A, Term_B, RelativeTo)) %>% 
+  dplyr::filter(!Interactive) %>% 
+  ggplot(aes(x = Term_B, y = Term_A, fill = log10(HR)))  +
+  facet_grid(Survival + Cutoff ~ FeatureGroup, scales = 'free', space = 'free') +
+  geom_tile(aes()) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+  scale_x_discrete(expand = expansion()) +
+  scale_y_discrete(expand = expansion()) +
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 12) +
+  theme(legend.title = element_text(),
+        legend.title.align = 0)
+dev.off()
+
+pdf('./CRC/08.Select_Survival_LA_Diffuse_Nest0.4_Boundary0.1_Radius70.pdf', width = 8, height = 5)
+temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(!Feature %>% str_detect('dirt')) %>% 
+  dplyr::filter(!Feature %>% str_detect('Unknown')) %>% 
+  dplyr::filter(!Feature %>% str_detect('undefined')) %>% 
+  dplyr::filter(p_coxph < 0.05) %>% 
+  dplyr::arrange(Interactive, Survival, Cutoff, p_coxph) %>% 
+  dplyr::left_join(temp_Feature %>% dplyr::distinct(FeatureGroup, Feature, Term_A, Term_B, RelativeTo)) %>% 
+  dplyr::filter(!Interactive) %>% 
+  dplyr::filter(!Feature %>% str_detect('CT2')) %>% 
+  dplyr::filter(!(is.na(RelativeTo) & !is.na(Term_B))) %>% 
+  ggplot(aes(x = Term_B, y = Term_A, fill = log10(HR)))  +
+  facet_grid(Survival + Cutoff ~ FeatureGroup, scales = 'free', space = 'free') +
+  geom_tile(aes()) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+  scale_x_discrete(expand = expansion()) +
+  scale_y_discrete(expand = expansion()) +
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 12) +
+  theme(legend.title = element_text(),
+        legend.title.align = 0)
+temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(!Feature %>% str_detect('dirt')) %>% 
+  dplyr::filter(!Feature %>% str_detect('Unknown')) %>% 
+  dplyr::filter(!Feature %>% str_detect('undefined')) %>% 
+  dplyr::filter(p_coxph < 0.05) %>% 
+  dplyr::arrange(Interactive, Survival, Cutoff, p_coxph) %>% 
+  dplyr::left_join(temp_Feature %>% dplyr::distinct(FeatureGroup, Feature, Term_A, Term_B, RelativeTo)) %>% 
+  dplyr::filter(!Interactive) %>% 
+  dplyr::filter(Feature %>% str_detect('CT2')) %>% 
+  dplyr::filter(!(is.na(RelativeTo) & !is.na(Term_B))) %>% 
+  ggplot(aes(x = Term_B, y = Term_A, fill = log10(HR)))  +
+  facet_grid(Survival + Cutoff ~ FeatureGroup, scales = 'free', space = 'free') +
+  geom_tile(aes()) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+  scale_x_discrete(expand = expansion()) +
+  scale_y_discrete(expand = expansion()) +
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 12) +
+  theme(legend.title = element_text(),
+        legend.title.align = 0)
+# dplyr::filter(Feature != 'CT1_vasculature;Stroma') %>% 
+# dplyr::filter(Feature != 'CT2_Vasculature;Stroma') %>% 
+# dplyr::filter(!Interactive) %>% 
+# print(n = nrow(.))
+dev.off()
+
+# Group Compare LA Diffuse ------
+ClinicalInfo_Pat <- fread('./data/ClinicalInfo_Pat_CRC.csv', check.names = T) %>%
+  dplyr::mutate(Group = Group %>% dplyr::case_match(
+    c(1) ~ "Crohn's like reaction (CLR)", 
+    c(2) ~ "diffuse inflammatory infiltration (DII)"
+  )  %>% forcats::fct_relevel(c("Crohn's like reaction (CLR)", "diffuse inflammatory infiltration (DII)")),
+  Age_Group = ifelse(Age <= median(Age), 
+                     paste0('Age <= ', median(Age)), paste0('Age > ', median(Age))) 
+  %>% forcats::fct_relevel(c(paste0('Age <= ', median(Age)), 
+                             paste0('Age > ', median(Age))))
+  )
+
+temp_list <- c('Group', 
+               'Sex', 'Age_Group', 
+               'Full_Histology', 
+               'Simple_Tumor_Location', 
+               'cp_TNM_Simple',
+               'Budding.grade', 
+               'MSI_IHC')
+
+temp_result_list <- list()
+temp_plot_list <- list()
+
+for (i in temp_list) {
+  
+  if (i == 'MSI_IHC') {
+    tmp_ClinicalInfo_Pat <- ClinicalInfo_Pat %>% filter(MSI_IHC != 'nd')
+  } else {
+    tmp_ClinicalInfo_Pat <- ClinicalInfo_Pat
+  }
+  
+  temp_Wilcox <- temp_Feature %>%
+    dplyr::left_join(tmp_ClinicalInfo_Pat %>% dplyr::rename(Pat_ID = Patient)) %>%
+    dplyr::group_by(Feature) %>%
+    dplyr::group_split() %>% 
+    purrr::map_dfr(~ {
+      data <- .
+      if (n_distinct(data[[i]]) > 2) {
+        tryCatch(
+          rstatix::pairwise_wilcox_test(
+            data = data,
+            formula = as.formula(paste0('Value ~ ', i)),
+            comparisons = combn(unique(tmp_ClinicalInfo_Pat[[i]]), 2) %>% split(., col(.)),
+            p.adjust.method = "BH"
+          ) %>% 
+            dplyr::mutate(Feature = unique(data$Feature)), 
+          error = function(e) tibble::tibble(Feature = unique(data$Feature), Error = e$message)
+        )
+      } else {
+        tryCatch(
+          rstatix::wilcox_test(
+            data = data,
+            formula = as.formula(paste0('Value ~ ', i))
+          ) %>% 
+            dplyr::mutate(Feature = unique(data$Feature)), 
+          error = function(e) tibble::tibble(Feature = unique(data$Feature), Error = e$message)
+        )
+      }
+    })
+  
+  temp_ES <- temp_Feature %>% 
+    dplyr::left_join(tmp_ClinicalInfo_Pat %>% dplyr::rename(Pat_ID = Patient)) %>% 
+    dplyr::group_by(Feature) %>% 
+    rstatix::cohens_d(as.formula(paste0('Value ~ ', i)))
+  
+  temp_result_list[[i]] <- temp_Wilcox %>% 
+    dplyr::select(Feature, group1, group2, n1, n2, p) %>% 
+    dplyr::left_join(temp_ES %>% dplyr::select(Feature, group1, group2, n1, n2, effsize, magnitude))
+  
+  if (n_distinct(tmp_ClinicalInfo_Pat[[i]]) > 2) {
+    temp_plot_list[[i]] <- temp_result_list[[i]] %>% 
+      dplyr::left_join(temp_Feature) %>% 
+      rstatix::add_significance(symbols = c("****", "***", "**", "*", "")) %>% 
+      dplyr::filter(!is.na(p)) %>% 
+      dplyr::group_by(group1, group2) %>%
+      dplyr::group_split() %>%
+      purrr::map(~ {
+        data <- .
+        ggplot(data, aes(y = Term_A, x = Term_B, fill = effsize)) +
+          facet_wrap(. ~ FeatureGroup, scales = 'free', nrow = 2) +
+          geom_tile() +
+          geom_text(aes(label  = p.signif)) +
+          scale_fill_gradient2(
+            name = paste0(i, '\n',
+                          'group1: ', data$group1, '\n',
+                          'group2: ', data$group2),
+            low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+          ggprism::theme_prism(base_fontface = 'plain', base_size = 12) +
+          theme(legend.title = element_text(),
+                legend.title.align = 0)} %>% list())
+  } else {
+    temp_plot_list[[i]] <- temp_result_list[[i]] %>% 
+      dplyr::left_join(temp_Feature) %>%
+      rstatix::add_significance(symbols = c("****", "***", "**", "*", "")) %>%
+      ggplot(aes(y = Term_A, x = Term_B, fill = effsize)) +
+      facet_wrap(. ~ FeatureGroup, scales = 'free', nrow = 2) +
+      geom_tile() +
+      geom_text(aes(label  = p.signif)) +
+      scale_fill_gradient2(
+        name = paste0(i, '\n',
+                      'group1: ', temp_result_list[[i]]$group1, '\n',
+                      'group2: ', temp_result_list[[i]]$group2),
+        low = 'blue', mid = 'white', high = 'red', midpoint = 0) +
+      ggprism::theme_prism(base_fontface = 'plain', base_size = 12) +
+      theme(legend.title = element_text(),
+            legend.title.align = 0)
+  }
+  
+}
+
+pdf('./CRC/09.All_Group_Freq_Comparison_LA_Diffuse_Nest0.4_Boundary0.1_Radius70.pdf', height = 13, width = 25)
+temp_plot_list
+dev.off()
+
+
+# Result 1 ------
+temp <- RESULT_01 %>% 
+  dplyr::left_join(INPUT_LAYERED %>% dplyr::nest_by(Image_ID, .key = 'LAYER')) %>% 
+  dplyr::filter(Image_ID %in% c('reg041_A', 'reg049_A', 'reg065_A', 'reg029_A')) %>% 
+  dplyr::rowwise() %>%
+  dplyr::mutate(POLYGON = RESULT_Layer %>% 
+                  dplyr::select(X_position, Y_position) %>% 
+                  as.matrix() %>% 
+                  concaveman::concaveman(concavity = 1) %>% 
+                  dplyr::as_tibble() %>% 
+                  dplyr::rename(x = V1, y = V2) %>% 
+                  dplyr::mutate(y = -y) %>% 
+                  list()) %>% 
+  dplyr::mutate(data = INPUT %>% dplyr::left_join(RESULT_Layer) %>% list()) %>%
+  dplyr::mutate(PLOT_1 = {ggplot(data = data, aes(x = X_position, y = -Y_position, group = -1L, fill = CN)) +
+      ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+      geom_point(aes(color = as.character(CT0)), size = 0.3) +
+      coord_fixed(ratio = 1) +
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) +
+      scale_fill_manual(values = c("#1AE4B6", "#1965B0") %>%
+                          setNames(c('Tumor boundary', 'Bulk tumor')), na.value = '#762A83') +
+      scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                           setNames(c('0', '1'))) +
+      labs(title = paste0('Image_ID = ', Image_ID))} %>% list()) %>% 
+  dplyr::mutate(PLOT_2 = {ggplot(data = data, aes(x = X_position, y = -Y_position, group = -1L, fill = CT0_2)) +
+      ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+      geom_point(aes(color = as.character(CT0)), size = 0.3) +
+      coord_fixed(ratio = 1) +
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) + 
+      scale_fill_manual(values = c("#1AE4B6", "#1965B0", "#762A83") %>%
+                          setNames(c('Boundary', 'Nest', 'Outside'))) +
+      scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                           setNames(c('0', '1'))) +
+      labs(title = paste0('Image_ID = ', Image_ID))
+  } %>% list()) %>% 
+  dplyr::mutate(PLOT_3 = {ggplot(data = LAYER, aes(x = X_position, y = -Y_position, group = -1L, fill = Layer_Anno)) +
+      ggforce::geom_voronoi_tile(bound = POLYGON, show.legend = T) +
+      geom_point(aes(color = as.character(CT0)), size = 0.3) +
+      coord_fixed(ratio = 1) +
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 8) + 
+      scale_fill_manual(values = c(colorRampPalette(c("#9FA8DAFF", "#762A83"))(21),
+                                   "#1AE4B6", 
+                                   colorRampPalette(c("#64B5F6FF", "#1965B0"))(6)) %>% 
+                          setNames(c(paste0("Stroma: ", seq(-20, 0, 1)),
+                                     'LE: 0',
+                                     paste0("Tumor: ", seq(0, 5, 1)))))+
+      scale_color_manual(values = c('darkmagenta', 'beige') %>%
+                           setNames(c('0', '1'))) +
+      labs(title = paste0('Image_ID = ', Image_ID))
+  } %>% list()) %>% 
+  dplyr::mutate(PLOT = patchwork::wrap_plots(PLOT_1, PLOT_2, PLOT_3, nrow = 1, guides = 'collect') %>% list())
+
+
+pdf('./CRC/ResultFigure/01.method.pdf', width = 18, height = 15)
+temp$PLOT %>% patchwork::wrap_plots(ncol = 1)
+dev.off()
+
+
+# Result 2 ------
+temp_Feature <- qs::qread('./CRC/ALL_SA_Layered_Nest0.4_Boundary0.1_Radius70.qs') %>% 
+  dplyr::mutate(CT1 = paste0('CT1_', CT1)) %>% 
+  dplyr::mutate(CT2 = paste0('CT2_', CT2)) %>% 
+  dplyr::left_join(ClinicalInfo_ROI %>% dplyr::transmute(Image_ID = ImageID, Pat_ID = Patient, TissueType)) %>% 
+  dplyr::filter(TissueType == 'Diffuse') %>%
+  {dplyr::bind_rows(
+    Helper1(., 'Pat_ID', 'SA1'),
+    Helper1(., 'Pat_ID', 'CT1'),
+    Helper1(., 'Pat_ID', 'CT2'),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = T),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = T),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = F),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = F),
+  )} %>% 
+  dplyr::mutate(Value  = ifelse(Prop4Filter >= 0.01 | is.na(Prop4Filter), Value, 0)) %>% 
+  dplyr::filter(!Feature %>% str_detect('Noise'))
+
+plot1data <- temp_Feature %>% 
+  dplyr::filter(Feature %in% c('Tumor', 'LE')) %>%
+  dplyr::left_join(ClinicalInfo_Pat, by = c('Pat_ID' = 'Patient')) %>%
+  dplyr::mutate(Feature = Feature %>% forcats::fct_relevel(c('Tumor', 'LE'))) %>% 
+  dplyr::mutate(Group = Group %>% dplyr::case_match(
+    c(1) ~ "CLR", 
+    c(2) ~ "DII"
+  )  %>% forcats::fct_relevel(c("CLR", "DII")))
+
+p <- ggplot(plot1data, aes(x=Group, y=Value)) + 
+  geom_boxplot(aes(color = Feature), outliers = F)+
+  geom_jitter(aes(color = Feature), width = 0.25) +
+  scale_fill_manual(values = c("#00BFC4", "#F8766D"))+
+  facet_wrap(. ~ Feature, scales = 'free_y', nrow = 1, strip.position = 'top') + 
+  ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 10) +
+  ggpubr::stat_compare_means(comparisons = list(c('CLR', 'DII'))) + 
+  scale_y_continuous(expand = expansion(c(0.05, 0.1))) +
+  scale_color_manual(values = c('#7caf2a', '#b16ba8')) +  
+  labs(x = NULL, y = 'Frequency') +
+  theme(axis.title.y = element_text(face = "bold", size = 10),
+        # axis.text.x = element_blank(),
+        axis.text.x = element_text(face = "bold", size = 10, vjust = 0.5),
+        axis.text.y = element_text(face = "bold", size = 10), 
+        legend.text = element_text(face = "bold", size = 10), 
+        legend.title = element_text(face = "bold", size = 10),
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 10),
+        strip.placement = "outside")
+ggsave('./CRC/ResultFigure/02.CLR_DII_compare.pdf', p, width = 6, height = 5)
+
+
+# Result 3 ------
+DII_Patients <- ClinicalInfo_Pat %>% dplyr::filter(Group == 2) %>% dplyr::pull(Patient)
+plot2data <- merge(INPUT_LAYERED %>% 
+                     dplyr::left_join(ClinicalInfo_ROI %>% dplyr::filter(Patient %in% DII_Patients) %>% dplyr::rename(Image_ID = ImageID)) %>% 
+                     tidytable::count(Image_ID, CT1) %>%
+                     dplyr::filter(!CT1 %>% str_detect('dirt')) %>%
+                     dplyr::filter(!CT1 %>% str_detect('undefined')) %>%
+                     tidyr::pivot_wider(id_cols = Image_ID, names_from = CT1, values_from = n, values_fill = 0),
+                   INPUT_LAYERED %>% 
+                     dplyr::left_join(ClinicalInfo_ROI %>% dplyr::filter(Patient %in% DII_Patients) %>% dplyr::rename(Image_ID = ImageID)) %>% 
+                     tidytable::count(Image_ID, SA1) %>% 
+                     dplyr::filter(SA1 == 'LE') %>%
+                     tidyr::pivot_wider(id_cols = Image_ID, names_from = SA1, values_from = n, values_fill = 0)) %>% 
+  tibble::column_to_rownames('Image_ID') %>% 
+  rstatix::cor_test(vars = 'LE', method = 'spearman') %>% 
+  dplyr::arrange(desc(cor)) %>% 
+  dplyr::mutate(var2 = var2 %>% forcats::fct_inorder() %>% forcats::fct_drop())
+
+p <- ggplot(plot2data, aes(y = cor, x = var2, fill = cor)) +
+  geom_bar(aes(color = ifelse(p < 0.05, 'black', '#FFFFFF00')), linewidth = 0.6, stat = 'identity') +
+  scale_color_identity(name = 'p value', labels = c('p >= 0.05', 'p < 0.05'), guide = 'none') +
+  scale_fill_gradient2(name = 'Spearman\'s ρ', high = '#CB2314', mid = 'white', low = '#046C9A', midpoint = 0) +
+  scale_x_discrete(expand = expansion(mult = c(0, 0), add = c(1, 1))) +
+  scale_y_continuous(limits = c(-0.3, 0.9), breaks = (-10*0.2):(10*0.9)/10, position = 'right') +
+  ggprism::theme_prism(border = T, base_size = 12, base_line_size = 0.5, base_fontface = 'plain')  + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), 
+        # legend.title = element_text(),
+        panel.border = element_rect(linewidth = 0.5)) + 
+  coord_fixed(ratio = 7.5 / 0.5, clip = 'off') +
+  geom_segment(x = -0.75, xend = -0.75, y = 0, yend = 0.9, lineend = 'butt', linejoin = 'mitre',
+               colour = "#CB2314", linewidth = 0.8, arrow = arrow(length = unit(0.15, "cm"))) +
+  geom_segment(x = -0.75, xend = -0.75, y = 0, yend = -0.3, lineend = 'butt', linejoin = 'mitre',
+               colour = "#046C9A", linewidth = 0.8, arrow = arrow(length = unit(0.15, "cm"))) +
+  geom_text(x = -1.75, y = 0, label = 'Edge Scarce     Edge Abundant', angle = 90, hjust = 0.45) + 
+  labs(y = NULL, x = NULL)
+ggsave('./CRC/ResultFigure/03.LE_TME_correlation.pdf', p, width = 8, height = 5)
+
+
+# Result 4 ------
+CLR_Patients <- ClinicalInfo_Pat %>% dplyr::filter(Group == "Crohn's like reaction (CLR)") %>% dplyr::pull(Patient)
+DII_Patients <- ClinicalInfo_Pat %>% dplyr::filter(Group == "diffuse inflammatory infiltration (DII)") %>% dplyr::pull(Patient)
+
+temp_CLR <- INPUT_LAYERED %>% 
+  dplyr::filter(CT0 == 0) %>%
+  dplyr::mutate(across(c(CT1, CT2), forcats::fct_drop)) %>%
+  dplyr::filter(!is.na(Layer)) %>% 
+  dplyr::mutate(Layer = Layer %>% as_factor()) %>% 
+  dplyr::right_join(ClinicalInfo_ROI %>% dplyr::filter(Patient %in% CLR_Patients) %>% dplyr::rename(Image_ID = ImageID))
+
+OR__CT_v_Layer_CLR <- 
+  tidyr::expand_grid(X = c('CT1', 'CT2'),
+                     Y = as.factor(-20:5), 
+  ) %>% 
+  purrr::pmap(., .progress = T, \(X, Y) {
+    temp_CLR %>% 
+      dplyr::mutate(Layer = ifelse(Layer == Y, 'Y', 'N') %>% 
+                      forcats::fct_expand(c('Y', 'N')) %>% 
+                      forcats::fct_relevel(c('Y', 'N'))) %>% 
+      dplyr::select(X, Layer) %>% 
+      table() %>% 
+      rstatix::row_wise_fisher_test(detailed = T) %>% 
+      dplyr::transmute(Group = X,
+                       CT = group,
+                       Layer = Y,
+                       OR = estimate,
+                       Pvalue = p)
+  })
+
+tidyr::expand_grid(X = c('CT1', 'CT2'),
+                   Y = as.factor(-20:5)) %>%
+  dplyr::mutate(OR_result = OR__CT_v_Layer_CLR) %>%
+  tidyr::unnest(OR_result) %>%
+  dplyr::group_by(Group, CT) %>%
+  dplyr::mutate(Label = ifelse(OR == max(OR), sprintf('%.2f', OR), '')) %>%
+  dplyr::ungroup() %>%
+  dplyr::nest_by(Group) %>%
+  .[2,] %>%
+  .$data %>%
+  .[[1]] %>%
+  dplyr::filter(Label != '') %>%
+  dplyr::mutate(temp = sign(as.numeric(as.character(Layer))) * OR) %>%
+  dplyr::arrange(desc(Layer), desc(temp)) %>% .$CT %>% paste0(collapse = "', '")
+
+temp_factor_level <- list(CT1 = c('granulocytes', 'CD163+ macrophages', 'tumor cells / immune cells', 'Tregs', 
+                                  'CD11b+ monocytes', 'adipocytes', 'immune cells / vasculature', 'undefined', 
+                                  'CD11b+CD68+ macrophages', 'dirt', 'stroma', 'CD68+ macrophages', 'CD4+ T cells GATA3+', 
+                                  'plasma cells', 'smooth muscle', 'CD68+CD163+ macrophages', 'NK cells', 'lymphatics', 
+                                  'B cells', 'CD4+ T cells CD45RO+', 'CD4+ T cells', 'immune cells', 'CD11c+ DCs', 
+                                  'CD8+ T cells', 'vasculature', 'nerves', 'CD3+ T cells', 'CD68+ macrophages GzmB+'),
+                          CT2 = c('Granulocyte', 'TME_Immune', 'CD4_Treg', 'Monocyte', 'Adipocyte', 
+                                  'Vasculature', 'TME_Unknown', 'Stroma', 'M1', 'Plasma cell', 
+                                  'Endothelial', 'M2', 'NK', 'B cell', 'CD4_Tconv', 'DC', 'CD8_T', 'Nerve', 'DNT'))
+
+OR__CT_v_Layer_CLR_plot <-
+  tidyr::expand_grid(X = c('CT1', 'CT2'),
+                     Y = as.factor(-20:5)) %>% 
+  dplyr::mutate(OR_result = OR__CT_v_Layer_CLR) %>% 
+  tidyr::unnest(OR_result) %>% 
+  dplyr::group_by(Group, CT) %>% 
+  dplyr::mutate(Label = ifelse(OR == max(OR), sprintf('%.2f', OR), '')) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::nest_by(Group) %>% 
+  dplyr::mutate(PLOT = {data %>% 
+      dplyr::mutate(CT = CT %>% forcats::fct_relevel(temp_factor_level[[Group]])) %>% 
+      dplyr::filter(!(CT  %>% str_detect('dirt'))) %>% 
+      dplyr::filter(!(CT  %>% str_detect('undefined'))) %>% 
+      dplyr::filter(!(CT %>% str_detect('TME_Unknown'))) %>% 
+      dplyr::mutate(OR = ifelse(OR >= 3, 3, OR)) %>% 
+      ggplot(aes(y = CT, x = Layer)) + 
+      geom_tile(aes(fill = OR)) +
+      geom_text(aes(label = Label), size = 2) + 
+      geom_point(aes(color = (Label == '')), shape = 1, size = 6) +
+      scale_fill_gradient2(low = '#5B8DD8', mid = "#FFFFFF", high = '#CB2314',
+                           midpoint = 1) +
+      scale_color_manual(values = c('#000000', '#FFFFFF00'), guide = 'none') +
+      scale_x_discrete(expand = expansion()) + 
+      scale_y_discrete(expand = expansion(), position = 'right') + 
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 10) +
+      theme(legend.title = element_text()) +
+      labs(y = NULL, title = paste('CLR', unique(Group), sep = '_')) +
+      coord_fixed(ratio = 1)} %>% 
+        list())
+
+pdf('./CRC/ResultFigure/04.CLR_CT_vs_Layer__OR.pdf', height = 13, width = 10)
+OR__CT_v_Layer_CLR_plot$PLOT %>% patchwork::wrap_plots(ncol = 1)
+dev.off()
+
+
+temp_DII <- INPUT_LAYERED %>% 
+  dplyr::filter(CT0 == 0) %>%
+  dplyr::mutate(across(c(CT1, CT2), forcats::fct_drop)) %>%
+  dplyr::filter(!is.na(Layer)) %>% 
+  dplyr::mutate(Layer = Layer %>% as_factor()) %>% 
+  dplyr::right_join(ClinicalInfo_ROI %>% dplyr::filter(Patient %in% DII_Patients) %>% dplyr::rename(Image_ID = ImageID))
+
+OR__CT_v_Layer_DII <- 
+  tidyr::expand_grid(X = c('CT1', 'CT2'),
+                     Y = as.factor(-20:5), 
+  ) %>% 
+  purrr::pmap(., .progress = T, \(X, Y) {
+    temp_DII %>% 
+      dplyr::mutate(Layer = ifelse(Layer == Y, 'Y', 'N') %>% 
+                      forcats::fct_expand(c('Y', 'N')) %>% 
+                      forcats::fct_relevel(c('Y', 'N'))) %>% 
+      dplyr::select(X, Layer) %>% 
+      table() %>% 
+      rstatix::row_wise_fisher_test(detailed = T) %>% 
+      dplyr::transmute(Group = X,
+                       CT = group,
+                       Layer = Y,
+                       OR = estimate,
+                       Pvalue = p)
+  })
+
+tidyr::expand_grid(X = c('CT1', 'CT2'),
+                   Y = as.factor(-20:5)) %>%
+  dplyr::mutate(OR_result = OR__CT_v_Layer_DII) %>%
+  tidyr::unnest(OR_result) %>%
+  dplyr::group_by(Group, CT) %>%
+  dplyr::mutate(Label = ifelse(OR == max(OR), sprintf('%.2f', OR), '')) %>%
+  dplyr::ungroup() %>%
+  dplyr::nest_by(Group) %>%
+  .[2,] %>%
+  .$data %>%
+  .[[1]] %>%
+  dplyr::filter(Label != '') %>%
+  dplyr::mutate(temp = sign(as.numeric(as.character(Layer))) * OR) %>%
+  dplyr::arrange(desc(Layer), desc(temp)) %>% .$CT %>% paste0(collapse = "', '")
+
+temp_factor_level <- list(CT1 = c('dirt', 'CD11b+CD68+ macrophages', 'CD4+ T cells', 'immune cells / vasculature', 
+                                  'stroma', 'immune cells', 'granulocytes', 'CD8+ T cells', 'tumor cells / immune cells', 
+                                  'CD68+ macrophages', 'Tregs', 'CD11c+ DCs', 'CD163+ macrophages', 'B cells', 
+                                  'CD3+ T cells', 'vasculature', 'plasma cells', 'NK cells', 'CD4+ T cells GATA3+', 
+                                  'lymphatics', 'CD68+CD163+ macrophages', 'CD11b+ monocytes', 'CD4+ T cells CD45RO+', 
+                                  'nerves', 'CD68+ macrophages GzmB+', 'smooth muscle', 'undefined', 'adipocytes'), 
+                          CT2 = c('TME_Unknown', 'Vasculature', 'Stroma', 'Granulocyte', 'CD8_T', 'TME_Immune', 
+                                  'M1', 'CD4_Treg', 'DC', 'B cell', 'DNT', 'Plasma cell', 'NK', 'M2', 'Monocyte', 
+                                  'CD4_Tconv', 'Nerve', 'Endothelial', 'Adipocyte'))
+
+OR__CT_v_Layer_DII_plot <-
+  tidyr::expand_grid(X = c('CT1', 'CT2'),
+                     Y = as.factor(-20:5)) %>% 
+  dplyr::mutate(OR_result = OR__CT_v_Layer_DII) %>% 
+  tidyr::unnest(OR_result) %>% 
+  dplyr::group_by(Group, CT) %>% 
+  dplyr::mutate(Label = ifelse(OR == max(OR), sprintf('%.2f', OR), '')) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::nest_by(Group) %>% 
+  dplyr::mutate(PLOT = {data %>% 
+      dplyr::mutate(CT = CT %>% forcats::fct_relevel(temp_factor_level[[Group]])) %>% 
+      dplyr::filter(!(CT  %>% str_detect('dirt'))) %>% 
+      dplyr::filter(!(CT  %>% str_detect('undefined'))) %>% 
+      dplyr::filter(!(CT %>% str_detect('TME_Unknown'))) %>% 
+      dplyr::mutate(OR = ifelse(OR >= 3, 3, OR)) %>% 
+      ggplot(aes(y = CT, x = Layer)) + 
+      geom_tile(aes(fill = OR)) +
+      geom_text(aes(label = Label), size = 2) + 
+      geom_point(aes(color = (Label == '')), shape = 1, size = 6) +
+      scale_fill_gradient2(low = '#5B8DD8', mid = "#FFFFFF", high = '#CB2314',
+                           midpoint = 1) +
+      scale_color_manual(values = c('#000000', '#FFFFFF00'), guide = 'none') +
+      scale_x_discrete(expand = expansion()) + 
+      scale_y_discrete(expand = expansion(), position = 'right') + 
+      ggprism::theme_prism(border = T, base_fontface = 'plain', base_size = 10) +
+      theme(legend.title = element_text()) +
+      labs(y = NULL, title = paste('DII', unique(Group), sep = '_')) +
+      coord_fixed(ratio = 1)} %>% 
+        list())
+
+pdf('./CRC/ResultFigure/05.DII_CT_vs_Layer__OR.pdf', height = 12, width = 10)
+OR__CT_v_Layer_DII_plot$PLOT %>% patchwork::wrap_plots(ncol = 1)
+dev.off()
+
+
+{INPUT_LAYERED %>% 
+    dplyr::filter(!is.na(Layer)) %>% 
+    dplyr::mutate(Layer = Layer %>% as_factor()) %>% 
+    dplyr::right_join(ClinicalInfo_ROI %>% dplyr::rename(Image_ID = ImageID)) %>% 
+    ggplot(aes(x= MeanDist2LE, color = CT1), fill = NA) +
+    facet_wrap(.~Group) +
+    geom_density() +
+    # labs(title = 'CLR_CT1') +
+    theme_minimal()
+  } %>% 
+  plotly::ggplotly()
+
+
+fread('./data/CRC_32763154_clusters_neighborhoods_markers.csv') %>% 
+  dplyr::group_by(`File Name`) %>% 
+  dplyr::mutate(Cell_ID = paste0(`File Name`, '_', sprintf('%04.f', dplyr::row_number()))) %>% 
+  dplyr::transmute(Image_ID = `File Name`, Cell_ID, CT1 = ClusterName, IDO1 = `IDO-1 - metabolism:Cyc_9_ch_4`) %>% 
+  dplyr::ungroup() %>% 
+  dplyr::left_join(ClinicalInfo_ROI %>% dplyr::rename(Image_ID = ImageID)) %>% 
+  dplyr::mutate(Group = Group %>% dplyr::case_match(
+    c(1) ~ "CLR", 
+    c(2) ~ "DII"
+  )  %>% forcats::fct_relevel(c("CLR", "DII"))) %>% 
+  dplyr::filter(CT1 == 'CD11c+ DCs') %>% 
+  ggplot(aes(x = Group, y = IDO1, fill = Group)) +
+  geom_boxplot() +
+  stat_compare_means(label = "p.format", vjust = -0.5) +
+  theme_classic() +
+  ylab('IDO-1 expression') +
+  theme(axis.title.y = element_text(face = "bold", size = 8),
+        axis.text.x = element_text(face = "bold", size = 8),
+        axis.text.y = element_text(face = "bold", size = 8),
+        legend.text = element_text(face = "bold", size = 5),
+        legend.title = element_text(face = "bold", size = 5))
+
+markers <- c("IDO1", "HLADR", "PDL1", "Ki67", "CD21")
+
+plots <- map(markers, ~{
+  marker <- .x  
+  
+  fread('./data/CRC_32763154_clusters_neighborhoods_markers.csv') %>% 
+    dplyr::group_by(`File Name`) %>% 
+    dplyr::mutate(Cell_ID = paste0(`File Name`, '_', sprintf('%04.f', dplyr::row_number()))) %>% 
+    dplyr::transmute(Image_ID = `File Name`, Cell_ID, CT1 = ClusterName, 
+                     IDO1 = `IDO-1 - metabolism:Cyc_9_ch_4`,
+                     HLADR = `HLA-DR - MHC-II:Cyc_5_ch_2`,
+                     PDL1 = `PD-L1 - checkpoint:Cyc_5_ch_3`,
+                     Ki67 = `Ki67 - proliferation:Cyc_5_ch_4`,
+                     CD21 = `CD21 - DCs:Cyc_6_ch_4`) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::left_join(ClinicalInfo_ROI %>% dplyr::rename(Image_ID = ImageID)) %>% 
+    dplyr::left_join(INPUT_LAYERED) %>% 
+    dplyr::mutate(Group = Group %>% dplyr::case_match(
+      c(1) ~ "CLR", 
+      c(2) ~ "DII"
+    ) %>% forcats::fct_relevel(c("CLR", "DII"))) %>% 
+    dplyr::filter(CT1 == 'CD11c+ DCs') %>% 
+    dplyr::filter(Group == 'DII') %>% 
+    ggplot(aes(x = SA1, y = .data[[marker]], fill = SA1)) +  # 动态映射当前 marker
+    geom_boxplot() +
+    stat_compare_means(comparisons = list(c('Stroma', 'LE'), c('LE', 'Tumor'), c('Stroma', 'Tumor')), 
+                       label = "p.format", vjust = -0.5) +
+    theme_classic() +
+    ylab(paste0(marker, ' expression')) + 
+    theme(axis.title.y = element_text(face = "bold", size = 8),
+          axis.text.x = element_text(face = "bold", size = 8),
+          axis.text.y = element_text(face = "bold", size = 8),
+          legend.text = element_text(face = "bold", size = 5),
+          legend.title = element_text(face = "bold", size = 5))
+})
+
+
+
+
+
+# Result 5 ------
+temp_Feature <- qs::qread('./CRC/ALL_SA_Layered_Nest0.4_Boundary0.1_Radius70.qs') %>% 
+  dplyr::mutate(CT1 = paste0('CT1_', CT1)) %>% 
+  dplyr::mutate(CT2 = paste0('CT2_', CT2)) %>% 
+  dplyr::left_join(ClinicalInfo_ROI %>% dplyr::transmute(Image_ID = ImageID, Pat_ID = Patient, TissueType)) %>% 
+  dplyr::filter(TissueType == 'Diffuse') %>%
+  {dplyr::bind_rows(
+    Helper1(., 'Pat_ID', 'SA1'),
+    Helper1(., 'Pat_ID', 'CT1'),
+    Helper1(., 'Pat_ID', 'CT2'),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = T),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = T),
+    
+    Helper2(., 'Pat_ID', 'CT1', 'SA1', REL2A = F, REL2B = F),
+    Helper2(., 'Pat_ID', 'CT2', 'SA1', REL2A = F, REL2B = F),
+  )} %>% 
+  dplyr::mutate(Value  = ifelse(Prop4Filter >= 0.01 | is.na(Prop4Filter), Value, 0)) %>% 
+  dplyr::filter(!Feature %>% str_detect('Noise'))
+
+temp_SurvivalResult <- temp_Feature %>% 
+  dplyr::left_join(ClinicalInfo_Pat, by = c('Pat_ID' = 'Patient')) %>%
+  # dplyr::filter(Group == 2) %>% 
+  dplyr::filter(Group == 'diffuse inflammatory infiltration (DII)') %>% 
+  {dplyr::mutate(INPUT = list(.), tidyr::expand_grid(
+    INTERACTIVE_COLUMN = c(NA, 'PostOP_Therapy'), 
+    SURVIVAL_TYPE = c('DFS', 'OS'#, 'OS', 'LRRFS'
+    ), 
+    CUTOFF = c('median', 'best')), 
+    VERBOSE = 0,
+  )} %>% 
+  dplyr::mutate(MESSAGE = paste0(INTERACTIVE_COLUMN, '; ', SURVIVAL_TYPE, '; ', CUTOFF)) %>% 
+  {dplyr::mutate(., RESULT = purrr::pmap(., GetSurvival))}
+
+temp_survplot <- temp_SurvivalResult$RESULT %>%
+  dplyr::bind_rows() %>% 
+  dplyr::filter(Interactive == 'FALSE') %>% 
+  dplyr::filter(Survival == 'OS') %>% 
+  dplyr::filter(Cutoff == 'median') %>%
+  dplyr::filter(Feature %in% c('CT1_CD4+ T cells CD45RO+', 'CT1_CD4+ T cells CD45RO+;Stroma;rel2_Stroma',
+                               'CT1_CD4+ T cells CD45RO+;LE;rel2_LE', 'CT1_CD4+ T cells CD45RO+;Tumor;rel2_Tumor')) %>% 
+  GetSurvivalPlots(ID = 1)
+
+pdf('./CRC/ResultFigure/06.CD4TcellsCD45RO_survival.pdf', height = 7, width = 25)
+print(patchwork::wrap_plots(temp_survplot$Plot1, nrow = 1))
+dev.off()
+
+
+# Result 6 ------
+nn_indices <- INPUT_0 %>%
+  dplyr::select(X_position, Y_position) %>%
+  dbscan::kNN(sort = FALSE, k = 10) %>% 
+  .$id
+
+nn_data <- lapply(1:nrow(nn_indices), function(i) {
+  data.frame(
+    Cell_ID = INPUT_0$Cell_ID[i],
+    Neighbor_ID = INPUT_0$Cell_ID[nn_indices[i, ]],
+    Neighbor_Type = INPUT_0$CT1[nn_indices[i, ]]
+  )
+}) %>% bind_rows() %>%
+  tidytable::count(Cell_ID, Neighbor_Type) %>% 
+  tidytable::group_by(Cell_ID) %>% 
+  tidytable::mutate(Value = n / 10) %>% 
+  tidytable::ungroup() %>% 
+  tidyr::pivot_wider(id_cols = Cell_ID, names_from = Neighbor_Type, values_from = Value, values_fill = 0) %>% 
+  dplyr::left_join(RESULT_01$RESULT_Boundary %>% bind_rows() %>% dplyr::select(Cell_ID, Boundary_Score)) %>% 
+  dplyr::left_join(RESULT_02 %>% dplyr::select(Cell_ID, MeanDist2LE)) %>% 
+  column_to_rownames('Cell_ID') %>% 
+  dplyr::mutate(MeanDist2LE = (MeanDist2LE - min(MeanDist2LE, na.rm = T))/(max(MeanDist2LE, na.rm = T) - min(MeanDist2LE, na.rm = T)))
+
+nn_data[is.na(nn_data)] <- 0
+
+model <- MiniBatchKmeans(
+  data = nn_data,          # 输入数据
+  clusters = 10, # 聚类数
+  batch_size = 100,
+  num_init = 5,          # 初始聚类中心的次数
+  max_iters = 100,       # 最大迭代次数
+  initializer = "kmeans++", # 初始化方法
+  seed = 0
+)
+
+data4plot <- model$centroids
+names(data4plot) <- names(nn_data)
+Heatmap(data4plot, cluster_rows = FALSE, show_row_names = TRUE)
+
+
+windows <- fread('./data/CRC_32763154_Neighborhood_windows.csv') %>% 
+  dplyr::rename(Image_ID = `File Name`, 
+                X_position = `X:X`, 
+                Y_position = `Y:Y`,
+                CT1 = ClusterName) %>% 
+  dplyr::left_join(INPUT_0) %>%
+  dplyr::left_join(RESULT_01$RESULT_Boundary %>% bind_rows() %>% dplyr::select(Cell_ID, Boundary_Score)) %>% 
+  dplyr::left_join(RESULT_02 %>% dplyr::select(Cell_ID, MeanDist2LE)) %>% 
+  dplyr::select(Cell_ID, `tumor cells`, `CD11c+ DCs`, `tumor cells / immune cells`,
+                `smooth muscle`, `lymphatics`, `adipocytes`, `undefined`,
+                `CD4+ T cells CD45RO+`, `CD8+ T cells`, `CD68+CD163+ macrophages`,
+                `plasma cells`, `Tregs`, `immune cells / vasculature`, `stroma`,
+                `CD68+ macrophages GzmB+`, `vasculature`, `nerves`,
+                `CD11b+CD68+ macrophages`, `granulocytes`, `CD68+ macrophages`,
+                `NK cells`, `CD11b+ monocytes`, `immune cells`,
+                `CD4+ T cells GATA3+`, `CD163+ macrophages`, `CD3+ T cells`,
+                `CD4+ T cells`, `B cells`, Boundary_Score, MeanDist2LE) %>% 
+  dplyr::mutate(dplyr::across(c(2:29), ~ .x /10 )) %>% 
+  # dplyr::mutate(MeanDist2LE1 = (MeanDist2LE - min(MeanDist2LE, na.rm = T))/(max(MeanDist2LE, na.rm = T) - min(MeanDist2LE, na.rm = T))) %>%
+  dplyr::mutate(MeanDist2LE = MeanDist2LE %>% scales::rescale() %>% {ifelse(is.na(.), 0, .)}) %>% 
+  dplyr::mutate(Boundary_Score = Boundary_Score %>% {ifelse(is.na(.), 0, .)}) %>% 
+  # dplyr::pull(MeanDist2LE) %>% summary()
+  column_to_rownames('Cell_ID')
+
+model <- MiniBatchKmeans(
+  data = windows,          # 输入数据
+  clusters = 10, # 聚类数
+  batch_size = 100,
+  num_init = 5,          # 初始聚类中心的次数
+  max_iters = 100,       # 最大迭代次数
+  initializer = "kmeans++", # 初始化方法
+  seed = 0
+)
+# data4plot <- as.data.frame(log2(((model$centroid+colMeans(model$centroids))/
+#                                    rowSums(model$centroid+colMeans(model$centroids)))/
+#                                   colMeans(model$centroids)))
+# names(data4plot) <- names(windows)
+# data4plot[data4plot >= 5] = 5
+# data4plot[data4plot <= -5] = -5
+temp <- model$centroids %>% 
+  # setNames(names(windows))
+  t() %>% 
+  scale() %>% 
+  as.matrix() %>% 
+  t() %>% 
+  scale()
+colnames(temp) <- names(windows)
+Heatmap(temp, cluster_rows = FALSE, show_row_names = TRUE, show_column_names = TRUE)
+
