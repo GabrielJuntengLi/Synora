@@ -1,7 +1,6 @@
 #' @title GetLayer
 #'
-#' @description
-#' This function takes a name and returns a greeting message.
+#' @description This function takes a name and returns a greeting message.
 #'
 #' @param INPUT A data frame that must contain the image ID, cell ID, the coordinates of the cell in the image, and the cell type (tumor or non-tumor).
 #' @param CELL_ID_COLUMN The cell ID.
