@@ -1,7 +1,6 @@
 #' @title GetMO
 #'
-#' @description
-#' This function takes a name and returns a greeting message.
+#' @description This function takes a name and returns a greeting message.
 #'
 #' @param INPUT A data frame that must contain the image ID, cell ID, the coordinates of the cell in the image, and the cell type (tumor or non-tumor).
 #' @param CELL_ID_COLUMN The cell ID.
@@ -12,8 +11,9 @@
 #' @param MEDIAN_NB Default 15. Recommended 15 to 30.
 #' @param ORIENTEDNESS TRUE or FALSE. Default T.
 #' @param VERBOSE Default 1.
-#' @importFrom tidyverse
-#' @importFrom data.table
+#' @importFrom dbscan frNN
+#' @importFrom purrr map_dbl
+#' @importFrom dplyr mutate rowwise transmute select ungroup rename
 #' @return A dataframe that contain tumor boundary and the microenvironment inside and outside the tumor divided by the boundary.
 #' @examples
 #' GetMO(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0', RADIUS = 'auto', MEDIAN_NB = 15, ORIENTEDNESS = F, VERBOSE = 1)
@@ -21,21 +21,21 @@
 GetMO <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
                   ANNO_COLUMN, RADIUS = 'auto', MEDIAN_NB = 15,
                   ORIENTEDNESS = T, VERBOSE = 1) {
-  
+
   if(!is.numeric(INPUT[[ANNO_COLUMN]])) stop("ANNO_COLUMN must be a numeric")
   if(!(RADIUS == 'auto' | (is.numeric(RADIUS) & RADIUS > 0))) stop("RADIUS must be positive number")
-  
+
   INPUT <- INPUT %>%
     dplyr::transmute(Cell_ID = !!as.name(CELL_ID_COLUMN),
                      X = !!as.name(X_POSITION),
                      Y = !!as.name(Y_POSITION),
                      Anno = !!as.name(ANNO_COLUMN))
-  
+
   if (RADIUS == 'auto') {
     if (VERBOSE > 0) {
       message('Finding Radius Threshold...')
     }
-    
+
     for (THR in c(seq(10, 100, by = 10),
                   seq(120, 200, by = 20),
                   seq(250, 500, by = 50))) {
@@ -46,27 +46,27 @@ GetMO <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
         purrr::map_dbl(length) %>%
         summary() %>%
         .[['Median']]
-      
+
       if (MEDIAN_NB_TEST >= MEDIAN_NB) {
         RADIUS <- THR
         break
       }
     }
-    
+
     if (RADIUS == 'auto') {
       RADIUS <- 500
       message('Cell density is too low.')
     }
-    
+
     if (VERBOSE > 0) {
       message('Choosing Radius of ', RADIUS, ' as threshold.')
     }
   }
-  
+
   FRNN <- INPUT %>%
     dplyr::select(X, Y) %>%
     dbscan::frNN(sort = F, eps = RADIUS)
-  
+
   if (ORIENTEDNESS) {
     RESULT <- INPUT %>%
       dplyr::mutate(ID = FRNN$id,
@@ -91,7 +91,7 @@ GetMO <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
                     !!as.name(X_POSITION) := X,
                     !!as.name(Y_POSITION) := Y,
                     !!as.name(ANNO_COLUMN) := Anno)
-    
+
   } else {
     RESULT <- INPUT %>%
       dplyr::mutate(ID = FRNN$id,
