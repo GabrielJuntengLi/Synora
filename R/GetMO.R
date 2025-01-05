@@ -15,6 +15,7 @@
 #' @importFrom purrr map_dbl
 #' @importFrom dplyr mutate rowwise transmute select ungroup rename
 #' @return A dataframe that contain tumor boundary and the microenvironment inside and outside the tumor divided by the boundary.
+#' @export
 #' @examples
 #' GetMO(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0', RADIUS = 'auto', MEDIAN_NB = 15, ORIENTEDNESS = F, VERBOSE = 1)
 

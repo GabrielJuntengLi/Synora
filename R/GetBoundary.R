@@ -21,6 +21,7 @@
 #' @importFrom tidyr unnest
 #' @importFrom forcats fct_expand fct_relevel
 #' @return A dataframe that contain the tumor boundary annotation.
+#' @export
 #' @examples
 #' GetBoundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0', ANNO_OF_INTEREST = 'Cancer', RADIUS = 'auto', NEST_SPECIFICITY = 0.4, BOUNDARY_SPECIFICITY = 0.01)
 

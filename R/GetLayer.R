@@ -12,6 +12,7 @@
 #' @importFrom dplyr transmute mutate nest_by arrange rename select
 #' @importFrom tidyr unnest
 #' @return A dataframe that contain the microenvironment inside and outside the tumor divided by the boundary.
+#' @export
 #' @examples
 #' GetGrid(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary')
 
