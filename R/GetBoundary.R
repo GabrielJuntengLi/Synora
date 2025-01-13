@@ -20,11 +20,13 @@
 #' @importFrom forcats fct_expand fct_relevel
 #' @importFrom magrittr %>%
 #' @return A data frame with the following columns:
-#' - `CELL_ID`: The unique identifier for each cell.
-#' - `X_POSITION`: The x-coordinate of the cell.
-#' - `Y_POSITION`: The y-coordinate of the cell.
-#' - `ANNOTATION`: The original cell annotation (1 for tumor, 0 for non-tumor).
-#' - `BOUNDARY`: A logical value indicating whether the cell is part of the tumor boundary (TRUE) or not (FALSE).
+#' \describe{
+#'   \item{CELL_ID}{The unique identifier for each cell.}
+#'   \item{X_POSITION}{The x-coordinate of the cell.}
+#'   \item{Y_POSITION}{The y-coordinate of the cell.}
+#'   \item{ANNOTATION}{The original cell annotation (1 for tumor, 0 for non-tumor).}
+#'   \item{BOUNDARY}{A logical value indicating whether the cell is part of the tumor boundary (TRUE) or not (FALSE).}
+#' }
 #' @export
 #' @examples
 #' data <- data.frame(
