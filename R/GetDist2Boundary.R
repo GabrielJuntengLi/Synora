@@ -1,4 +1,4 @@
-#' @title GetLayer
+#' @title GetDist2Boundary
 #'
 #' @description This function takes a name and returns a greeting message.
 #'
@@ -14,7 +14,7 @@
 #' @return A dataframe that contain the microenvironment inside and outside the tumor divided by the boundary.
 #' @export
 #' @examples
-#' GetGrid(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary')
+#' GetDist2Boundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary')
 
 GetLayer <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
                     ANNO_COLUMN, ANNO_OF_BOUNDARY, K = 5) {

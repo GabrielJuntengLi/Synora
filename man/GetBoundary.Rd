@@ -22,40 +22,62 @@ GetBoundary(
 )
 }
 \arguments{
-\item{INPUT}{A data frame that must contain the image ID, cell ID, the coordinates of the cell in the image, and the cell type (tumor or non-tumor).}
+\item{INPUT}{A data frame containing cell coordinates and annotations, where each row represents a cell in one single image.}
 
-\item{CELL_ID_COLUMN}{The cell ID.}
+\item{CELL_ID_COLUMN}{(optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.}
 
-\item{X_POSITION}{The x-axis coordinate of cell in image.}
+\item{X_POSITION}{The name of the column containing the x-coordinates of the cells.}
 
-\item{Y_POSITION}{The y-axis coordinate of cell in image.}
+\item{Y_POSITION}{The name of the column containing the y-coordinates of the cells.}
 
-\item{ANNO_COLUMN}{The cell type, binary classification (tumor -> 1 or non-tumor -> 0).}
+\item{ANNO_COLUMN}{The name of the column containing the cell annotations, where 1 indicates a tumor cell and 0 indicates a non-tumor cell. Could be binary or continuous.}
 
-\item{ANNO_OF_INTEREST}{The cell type interested, binary classification ('Cancer' or non-tumor).}
+\item{ANNO_MIDPOINT}{(optional) The midpoint of the cell annotation range. Default is 0.5.}
 
-\item{ANNO_MAX}{Default 1.}
+\item{RADIUS}{(optional) The radius used for determination of neighbors. If set to 'auto', the radius will be determined automatically. Default is 'auto'.}
 
-\item{ANNO_MIN}{Default 0.}
+\item{MEDIAN_NB}{(optional) Used when RADIUS is set to 'auto' to determine the minimal radius that suffices the profiling of cell neighborhood. Default 15.}
 
-\item{ANNO_MIDPOINT}{Default 0.5.}
+\item{NEST_MIN_SIZE}{(optional) The minimum size of cell nests, recommended between 5 and 10. Default is 5.}
 
-\item{RADIUS}{Default 'auto'.}
+\item{NEST_SPECIFICITY}{(optional) The specificity of nest cell detection, recommended between 0.1 and 0.4. Default is 0.25. This is the minimal frequency of neighboring tumor cells for the definition of a nest cell. Higher nest specificity results in less nest cells detected.}
 
-\item{MEDIAN_NB}{Default 15. Recommended 15 to 30.}
+\item{BOUNDARY_SPECIFICITY}{(optional) The specificity of boundary cell detection, recommended between 0.01 and 0.1. Default is 0.05. Higher boundary specificity results in less boundary cells detected.}
 
-\item{NEST_MIN_SIZE}{Default 5. Recommended 5 to 10.}
-
-\item{NEST_SPECIFICITY}{Default 0.25. Recommended 0.2 to 0.4.}
-
-\item{BOUNDARY_SPECIFICITY}{Default 0.25. Recommended 0.2 to 0.4.}
+\item{ANNO_RANGE}{(optional) The range of the cell annotations. Default is c(0, 1).}
 }
 \value{
-A dataframe that contain the tumor boundary annotation.
+A data frame with the following columns:
+\itemize{
+\item \code{CELL_ID}: The unique identifier for each cell.
+\item \code{X_POSITION}: The x-coordinate of the cell.
+\item \code{Y_POSITION}: The y-coordinate of the cell.
+\item \code{ANNOTATION}: The original cell annotation (1 for tumor, 0 for non-tumor).
+\item \code{BOUNDARY}: A logical value indicating whether the cell is part of the tumor boundary (TRUE) or not (FALSE).
+}
 }
 \description{
-This function takes a name and returns a greeting message.
+This function takes a data frame of cell coordinates and annotations and returns a data frame with the tumor boundary annotation.
 }
 \examples{
-GetBoundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0', ANNO_OF_INTEREST = 'Cancer', RADIUS = 'auto', NEST_SPECIFICITY = 0.4, BOUNDARY_SPECIFICITY = 0.01)
+data <- data.frame(
+  Cell_ID = 1:100,
+  X_position = rnorm(100, 50, 10),
+  Y_position = rnorm(100, 50, 10),
+  CT0 = sample(c(0, 1), 100, replace = TRUE)
+)
+
+boundary_df <- GetBoundary(
+  INPUT = data,
+  X_POSITION = 'X_position',
+  Y_POSITION = 'Y_position',
+  ANNO_COLUMN = 'CT0',
+  CELL_ID_COLUMN = 'Cell_ID',
+  RADIUS = 'auto',
+  NEST_SPECIFICITY = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
+
+# Visualize the tumor boundary
+plot(boundary_df$X_POSITION, boundary_df$Y_POSITION, col = ifelse(boundary_df$BOUNDARY, 'red', 'black'), pch = 16)
 }
