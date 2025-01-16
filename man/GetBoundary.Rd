@@ -6,31 +6,31 @@
 \usage{
 GetBoundary(
   INPUT,
-  CELL_ID_COLUMN,
   X_POSITION,
   Y_POSITION,
   ANNO_COLUMN,
-  ANNO_OF_INTEREST,
-  ANNO_MAX = 1,
-  ANNO_MIN = 0,
+  CELL_ID_COLUMN,
+  ANNO_RANGE = c(0, 1),
   ANNO_MIDPOINT = 0.5,
   RADIUS = "auto",
   MEDIAN_NB = 15,
   NEST_MIN_SIZE = 5,
   NEST_SPECIFICITY = 0.25,
-  BOUNDARY_SPECIFICITY = 0.25
+  BOUNDARY_SPECIFICITY = 0.05
 )
 }
 \arguments{
 \item{INPUT}{A data frame containing cell coordinates and annotations, where each row represents a cell in one single image.}
-
-\item{CELL_ID_COLUMN}{(optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.}
 
 \item{X_POSITION}{The name of the column containing the x-coordinates of the cells.}
 
 \item{Y_POSITION}{The name of the column containing the y-coordinates of the cells.}
 
 \item{ANNO_COLUMN}{The name of the column containing the cell annotations, where 1 indicates a tumor cell and 0 indicates a non-tumor cell. Could be binary or continuous.}
+
+\item{CELL_ID_COLUMN}{(optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.}
+
+\item{ANNO_RANGE}{(optional) The range of the cell annotations. Default is c(0, 1).}
 
 \item{ANNO_MIDPOINT}{(optional) The midpoint of the cell annotation range. Default is 0.5.}
 
@@ -43,8 +43,6 @@ GetBoundary(
 \item{NEST_SPECIFICITY}{(optional) The specificity of nest cell detection, recommended between 0.1 and 0.4. Default is 0.25. This is the minimal frequency of neighboring tumor cells for the definition of a nest cell. Higher nest specificity results in less nest cells detected.}
 
 \item{BOUNDARY_SPECIFICITY}{(optional) The specificity of boundary cell detection, recommended between 0.01 and 0.1. Default is 0.05. Higher boundary specificity results in less boundary cells detected.}
-
-\item{ANNO_RANGE}{(optional) The range of the cell annotations. Default is c(0, 1).}
 }
 \value{
 A data frame with the following columns:

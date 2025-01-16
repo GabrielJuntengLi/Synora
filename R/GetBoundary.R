@@ -50,21 +50,26 @@
 #' # Visualize the tumor boundary
 #' plot(boundary_df$X_POSITION, boundary_df$Y_POSITION, col = ifelse(boundary_df$BOUNDARY, 'red', 'black'), pch = 16)
 
-GetBoundary <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
-                        ANNO_COLUMN, ANNO_OF_INTEREST,
-                        ANNO_MAX = 1, ANNO_MIN = 0, ANNO_MIDPOINT = 0.5,
+GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
+                        ANNO_COLUMN, CELL_ID_COLUMN,
+                        ANNO_RANGE = c(0, 1), ANNO_MIDPOINT = 0.5,
                         RADIUS = 'auto',
                         MEDIAN_NB = 15,                 # 15-30
                         NEST_MIN_SIZE = 5,              # 5-10
                         NEST_SPECIFICITY = 0.25,        # 0.2-0.4
-                        BOUNDARY_SPECIFICITY = 0.25     # 0.2-0.4
-                        # BOUNDARY_SPECIFICITY = 0.02     # 0.01-0.03
+                        BOUNDARY_SPECIFICITY = 0.05     # 0.2-0.4
 ) {
   INPUT <- INPUT %>%
     dplyr::mutate(
       !!as.name(ANNO_COLUMN) := ifelse(!!as.name(ANNO_COLUMN) >= ANNO_MIDPOINT,
-                                       (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_MAX - ANNO_MIDPOINT),
-                                       (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_MIDPOINT - ANNO_MIN)))
+                                       (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_RANGE[2] - ANNO_MIDPOINT),
+                                       (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_MIDPOINT - ANNO_RANGE[1])))
+  if (missing(CELL_ID_COLUMN)) {
+    INPUT <- INPUT %>% dplyr::mutate(Cell_ID = dplyr::row_number())
+    CELL_ID_COLUMN <- 'Cell_ID'
+  } #else {
+    # INPUT[[CELL_ID_COLUMN]]
+    # }
 
   RESULT_1 <- INPUT %>%
     GetMO(CELL_ID_COLUMN = CELL_ID_COLUMN, X_POSITION = X_POSITION, Y_POSITION = Y_POSITION,

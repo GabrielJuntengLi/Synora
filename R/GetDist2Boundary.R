@@ -16,8 +16,8 @@
 #' @examples
 #' GetDist2Boundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary')
 
-GetLayer <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
-                    ANNO_COLUMN, ANNO_OF_BOUNDARY, K = 5) {
+GetDist2Boundary <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
+                             ANNO_COLUMN, ANNO_OF_BOUNDARY, K = 5) {
   if (sum(INPUT[[ANNO_COLUMN]] == ANNO_OF_BOUNDARY, na.rm = T) > 1) {
     RESULT <- INPUT %>%
       dplyr::transmute(Cell_ID = !!as.name(CELL_ID_COLUMN),
