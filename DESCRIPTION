@@ -1,10 +1,10 @@
 Package: Synora
-Title: What the Package Does (One Line, Title Case)
-Version: 0.0.0.9000
+Title: Boundary Detection and Analysis in Single Cell Spatial Data.
+Version: 0.0.0.0121
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
-           comment = c(ORCID = "YOUR-ORCID-ID"))
-Description: What the package does (one paragraph).
+    person("Junteng", "Li", , "lijt@sysucc.org.cn", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0003-2982-0304"))
+Description: Boundary Detection and Analysis in Single Cell Spatial Data.
 License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
     license
 Encoding: UTF-8
