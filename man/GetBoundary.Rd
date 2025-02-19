@@ -10,6 +10,7 @@ GetBoundary(
   Y_POSITION,
   ANNO_COLUMN,
   CELL_ID_COLUMN,
+  CELL_ID_PREFIX,
   ANNO_RANGE = c(0, 1),
   ANNO_MIDPOINT = 0.5,
   RADIUS = "auto",
@@ -30,6 +31,8 @@ GetBoundary(
 
 \item{CELL_ID_COLUMN}{(optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.}
 
+\item{CELL_ID_PREFIX}{(optional) The prefix used for creating cell IDs. Default is NULL.}
+
 \item{ANNO_RANGE}{(optional) The range of the cell annotations. Default is c(0, 1).}
 
 \item{ANNO_MIDPOINT}{(optional) The midpoint of the cell annotation range. Default is 0.5.}
@@ -43,8 +46,6 @@ GetBoundary(
 \item{NEST_SPECIFICITY}{(optional) The specificity of nest cell detection, recommended between 0.1 and 0.4. Default is 0.25. This is the minimal frequency of neighboring tumor cells for the definition of a nest cell. Higher nest specificity results in less nest cells detected.}
 
 \item{BOUNDARY_SPECIFICITY}{(optional) The specificity of boundary cell detection, recommended between 0.01 and 0.1. Default is 0.05. Higher boundary specificity results in less boundary cells detected.}
-
-\item{CELL_ID_PREFIX}{(optional) The prefix used for creating cell IDs. Default is NULL.}
 }
 \value{
 A data frame with the following columns:

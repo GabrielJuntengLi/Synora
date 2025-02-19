@@ -52,7 +52,7 @@
 #' plot(boundary_df$X_POSITION, boundary_df$Y_POSITION, col = ifelse(boundary_df$BOUNDARY, 'red', 'black'), pch = 16)
 
 GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
-                        ANNO_COLUMN, CELL_ID_COLUMN,
+                        ANNO_COLUMN, CELL_ID_COLUMN, CELL_ID_PREFIX,
                         ANNO_RANGE = c(0, 1), ANNO_MIDPOINT = 0.5,
                         RADIUS = 'auto',
                         MEDIAN_NB = 15,                 # 15-30

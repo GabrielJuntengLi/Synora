@@ -50,7 +50,11 @@ GetDist2Boundary <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
                     !!as.name(ANNO_COLUMN) := Anno)
   } else {
     RESULT <- INPUT %>%
-      dplyr::select(dplyr::all_of(c(CELL_ID_COLUMN, X_POSITION, Y_POSITION, ANNO_COLUMN)))
+      dplyr::select(dplyr::all_of(c(CELL_ID_COLUMN, X_POSITION, Y_POSITION, ANNO_COLUMN))) %>%
+      dplyr::mutate(MinDistance = NA,
+                    MeanDistance = NA,
+                    kNN_ID = NULL,
+                    kNN_dist = NULL)
   }
   return(RESULT)
 }
