@@ -26,7 +26,7 @@ GetBoundary(
 
 \item{Y_POSITION}{The name of the column containing the y-coordinates of the cells.}
 
-\item{ANNO_COLUMN}{The name of the column containing the cell annotations, where 1 indicates a tumor cell and 0 indicates a non-tumor cell. Could be binary or continuous.}
+\item{ANNO_COLUMN}{The name of the column containing the cell annotations, where 1 indicates a tumor/nest cell and 0 indicates a non-tumor/non-nest cell. Can be binary or continuous.}
 
 \item{CELL_ID_COLUMN}{(optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.}
 
@@ -43,6 +43,8 @@ GetBoundary(
 \item{NEST_SPECIFICITY}{(optional) The specificity of nest cell detection, recommended between 0.1 and 0.4. Default is 0.25. This is the minimal frequency of neighboring tumor cells for the definition of a nest cell. Higher nest specificity results in less nest cells detected.}
 
 \item{BOUNDARY_SPECIFICITY}{(optional) The specificity of boundary cell detection, recommended between 0.01 and 0.1. Default is 0.05. Higher boundary specificity results in less boundary cells detected.}
+
+\item{CELL_ID_PREFIX}{(optional) The prefix used for creating cell IDs. Default is NULL.}
 }
 \value{
 A data frame with the following columns:

@@ -1,6 +1,6 @@
 Package: Synora
 Title: Boundary Detection and Analysis in Single Cell Spatial Data.
-Version: 0.0.0.0121
+Version: 0.0.0.0219
 Authors@R: 
     person("Junteng", "Li", , "lijt@sysucc.org.cn", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0003-2982-0304"))
@@ -15,4 +15,7 @@ Imports:
     dplyr,
     forcats,
     purrr,
-    tidyr
+    tidyr,
+    magrittr,
+    concaveman,
+    sf

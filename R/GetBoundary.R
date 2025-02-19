@@ -5,8 +5,9 @@
 #' @param INPUT A data frame containing cell coordinates and annotations, where each row represents a cell in one single image.
 #' @param X_POSITION The name of the column containing the x-coordinates of the cells.
 #' @param Y_POSITION The name of the column containing the y-coordinates of the cells.
-#' @param ANNO_COLUMN The name of the column containing the cell annotations, where 1 indicates a tumor cell and 0 indicates a non-tumor cell. Could be binary or continuous.
+#' @param ANNO_COLUMN The name of the column containing the cell annotations, where 1 indicates a tumor/nest cell and 0 indicates a non-tumor/non-nest cell. Can be binary or continuous.
 #' @param CELL_ID_COLUMN (optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.
+#' @param CELL_ID_PREFIX (optional) The prefix used for creating cell IDs. Default is NULL.
 #' @param ANNO_RANGE (optional) The range of the cell annotations. Default is c(0, 1).
 #' @param ANNO_MIDPOINT (optional) The midpoint of the cell annotation range. Default is 0.5.
 #' @param RADIUS (optional) The radius used for determination of neighbors. If set to 'auto', the radius will be determined automatically. Default is 'auto'.
@@ -64,12 +65,13 @@ GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
       !!as.name(ANNO_COLUMN) := ifelse(!!as.name(ANNO_COLUMN) >= ANNO_MIDPOINT,
                                        (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_RANGE[2] - ANNO_MIDPOINT),
                                        (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_MIDPOINT - ANNO_RANGE[1])))
-  if (missing(CELL_ID_COLUMN)) {
+  if (missing(CELL_ID_COLUMN) & missing(CELL_ID_PREFIX)) {
     INPUT <- INPUT %>% dplyr::mutate(Cell_ID = dplyr::row_number())
     CELL_ID_COLUMN <- 'Cell_ID'
-  } #else {
-    # INPUT[[CELL_ID_COLUMN]]
-    # }
+  } else if (missing(CELL_ID_COLUMN) & !missing(CELL_ID_PREFIX)) {
+    INPUT <- INPUT %>% dplyr::mutate(Cell_ID = paste0(CELL_ID_PREFIX, '_', dplyr::row_number()))
+    CELL_ID_COLUMN <- 'Cell_ID'
+  }
 
   RESULT_1 <- INPUT %>%
     GetMO(CELL_ID_COLUMN = CELL_ID_COLUMN, X_POSITION = X_POSITION, Y_POSITION = Y_POSITION,

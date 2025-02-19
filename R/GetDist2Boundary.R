@@ -2,13 +2,13 @@
 #'
 #' @description This function takes a name and returns a greeting message.
 #'
-#' @param INPUT A data frame that must contain the image ID, cell ID, the coordinates of the cell in the image, and the cell type (tumor or non-tumor).
-#' @param CELL_ID_COLUMN The cell ID.
-#' @param X_POSITION The x-axis coordinate of cell in image.
-#' @param Y_POSITION The y-axis coordinate of cell in image.
-#' @param ANNO_COLUMN The cell type, binary classification (tumor -> 1 or non-tumor -> 0).
-#' @param ANNO_OF_BOUNDARY The tumor boundary annotation derived from GetBoundary.
-#' @param K Default 5.
+#' @param INPUT A data frame containing cell coordinates and boundary annotations, where each row represents a cell in one single image.
+#' @param CELL_ID_COLUMN The name of the column containing unique cell IDs.
+#' @param X_POSITION The name of the column containing the x-coordinates of the cells.
+#' @param Y_POSITION The name of the column containing the y-coordinates of the cells.
+#' @param ANNO_COLUMN The name of the column containing the boundary annotations.
+#' @param ANNO_OF_BOUNDARY The name of boundary annotation derived from GetBoundary. Default is "Boundary".
+#' @param K The number of neighboring boundary cells, used for calculating MeanDistance. Default is 5.
 #' @importFrom dplyr transmute mutate nest_by arrange rename select
 #' @importFrom tidyr unnest
 #' @return A dataframe that contain the microenvironment inside and outside the tumor divided by the boundary.
@@ -17,7 +17,7 @@
 #' GetDist2Boundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary')
 
 GetDist2Boundary <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
-                             ANNO_COLUMN, ANNO_OF_BOUNDARY, K = 5) {
+                             ANNO_COLUMN, ANNO_OF_BOUNDARY = 'Boundary', K = 5) {
   if (sum(INPUT[[ANNO_COLUMN]] == ANNO_OF_BOUNDARY, na.rm = T) > 1) {
     RESULT <- INPUT %>%
       dplyr::transmute(Cell_ID = !!as.name(CELL_ID_COLUMN),
