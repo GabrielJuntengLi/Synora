@@ -19,6 +19,7 @@
 #' @examples
 #' GetMO(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0', RADIUS = 'auto', MEDIAN_NB = 15, ORIENTEDNESS = F, VERBOSE = 1)
 
+
 GetMO <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
                   ANNO_COLUMN, RADIUS = 'auto', MEDIAN_NB = 15,
                   ORIENTEDNESS = T, VERBOSE = 1) {
