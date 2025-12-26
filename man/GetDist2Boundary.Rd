@@ -6,35 +6,145 @@
 \usage{
 GetDist2Boundary(
   INPUT,
-  CELL_ID_COLUMN,
   X_POSITION,
   Y_POSITION,
-  ANNO_COLUMN,
+  CELL_ID_COLUMN,
+  CELL_ID_PREFIX,
+  ANNO_COLUMN = "SynoraAnnotation",
   ANNO_OF_BOUNDARY = "Boundary",
+  DIRECTION = list(negative = "Outside", positive = "Nest"),
   K = 5
 )
 }
 \arguments{
-\item{INPUT}{A data frame containing cell coordinates and boundary annotations, where each row represents a cell in one single image.}
+\item{INPUT}{Input data frame containing cell coordinates and boundary annotations, where each row represents a cell in one single image.}
 
-\item{CELL_ID_COLUMN}{The name of the column containing unique cell IDs.}
+\item{X_POSITION}{Name of X coordinate column.}
 
-\item{X_POSITION}{The name of the column containing the x-coordinates of the cells.}
+\item{Y_POSITION}{Name of Y coordinate column.}
 
-\item{Y_POSITION}{The name of the column containing the y-coordinates of the cells.}
+\item{CELL_ID_COLUMN}{(optional) Cell ID column. If not provided, row indices will be used as cell IDs. Default NULL.}
 
-\item{ANNO_COLUMN}{The name of the column containing the boundary annotations.}
+\item{CELL_ID_PREFIX}{(optional) Cell ID prefix used for creating cell IDs. Default NULL.}
 
-\item{ANNO_OF_BOUNDARY}{The name of boundary annotation derived from GetBoundary. Default is "Boundary".}
+\item{ANNO_COLUMN}{Name of annotation column containing boundary annotation. Default is "SynoraAnnotation".}
 
-\item{K}{The number of neighboring boundary cells, used for calculating MeanDistance. Default is 5.}
+\item{ANNO_OF_BOUNDARY}{Annotation value representing boundaries. Default is "Boundary".}
+
+\item{DIRECTION}{Named list specifying direction mapping with:
+\itemize{
+\item \code{negative}: Annotation value for negative direction (default: 'Outside')
+\item \code{positive}: Annotation value for positive direction (default: 'Nest')
+}
+Set to \code{NULL} to ignore directionality}
+
+\item{K}{Number of nearest boundary neighbors to consider. Default is 5.}
 }
 \value{
-A dataframe that contain the microenvironment inside and outside the tumor divided by the boundary.
+A data frame with the following columns:
+\describe{
+\item{CELL_ID}{Cell ID column.}
+\item{X_POSITION}{X coordinate column.}
+\item{Y_POSITION}{Y coordinate column.}
+\item{ANNO_COLUMN}{Cell annotation column containing boundary cells.}
+\item{Distance2Boundary}{Euclidean distance to boundary cell(s) (could be negative if DIRECTION applied).}
+}
 }
 \description{
-This function takes a name and returns a greeting message.
+Calculate Distance to Boundary with Directionality
 }
 \examples{
-GetDist2Boundary(CELL_ID_COLUMN = 'Cell_ID', X_POSITION = 'X_position', Y_POSITION = 'Y_position', ANNO_COLUMN = 'CT0_2', ANNO_OF_BOUNDARY = 'Boundary')
+library(tidyverse)
+library(patchwork)
+library(Synora)
+
+# Generate Dummy Data
+set.seed(123)
+DummyData <- tidyr::expand_grid(X = seq(-1, 1, length.out = 65),
+                                Y = seq(-1, 1, length.out = 65)) \%>\%
+  dplyr::mutate(R = 0.8,
+                Sinusoid = 0.4,
+                theta = 2 * atan(Y / (X + sqrt(X ^ 2 + Y ^ 2))),
+                theta = ifelse(is.na(theta), pi, theta),
+                CT = (X / R - Sinusoid * cos(theta) * sin(12 * theta)) ^ 2 +
+                  (Y / R - Sinusoid * sin(theta) * sin(12 * theta)) ^ 2 < 1) \%>\%
+  dplyr::mutate(CT = ifelse(CT & (as.logical(runif(n = nrow(.)) \%/\% 0.75)), !CT, CT) \%>\%
+                  as.numeric()) \%>\%
+  dplyr::mutate(X = 250 * X + rnorm(n = nrow(.)),
+                Y = 250 * Y + rnorm(n = nrow(.))) \%>\%
+  dplyr::mutate(X = X \%>\% pmax(-250) \%>\% pmin(250),
+                Y = Y \%>\% pmax(-250) \%>\% pmin(250)) \%>\%
+  dplyr::mutate(Cell_ID = paste0('Cell_', sprintf('\%05.f', dplyr::row_number())))
+set.seed(NULL)
+
+# Run GetBoundary
+BoundaryResult <- Synora::GetBoundary(
+  INPUT = DummyData,
+  X_POSITION = 'X',
+  Y_POSITION = 'Y',
+  ANNO_COLUMN = 'CT',
+  CELL_ID_COLUMN = 'Cell_ID',
+  RADIUS = 20,
+  NEST_SPECIFICITY = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
+
+# Run GetDist2Boundary
+LayerResult <- Synora::GetDist2Boundary(
+  INPUT = BoundaryResult,
+  CELL_ID_COLUMN = 'Cell_ID',
+  X_POSITION = 'X',
+  Y_POSITION = 'Y',
+  ANNO_COLUMN = 'SynoraAnnotation',
+  ANNO_OF_BOUNDARY = 'Boundary'
+)
+
+# Visualization
+p <- patchwork::wrap_plots(
+  nrow = 2,
+  DummyData \%>\%
+    ggplot(aes(X, Y, color = as.factor(CT))) +
+    geom_point(size = 1) +
+    scale_color_manual(name = 'Cell Type',
+                       values = c(`0` = '#e9c46a', `1` = '#046C9A'),
+                       labels = c('Non-tumor cell', 'Tumor cell')) +
+    labs(title = 'Cell Type') +
+    theme_void() +
+    coord_equal(),
+  BoundaryResult \%>\%
+    dplyr::mutate(BoundaryScore = pmin(BoundaryScore, 0.5)) \%>\%
+    ggplot(aes(X, Y, color = BoundaryScore)) +
+    geom_point(size = 1) +
+    scale_color_gradient2(low = '#046C9A',
+                          mid = '#FFFFFF',
+                          high = '#CB2314',
+                          midpoint = 0.25,
+                          limits = c(0, 0.5),
+                          name = "Boundary Score") +
+    labs(title = "Boundary Score") +
+    theme_void() +
+    coord_equal(),
+  BoundaryResult \%>\%
+    ggplot(aes(X, Y, color = factor(SynoraAnnotation))) +
+    geom_point(size = 1) +
+    scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
+                       name = "Synora Annotation") +
+    labs(title = "Synora Annotation") +
+    theme_void() +
+    coord_equal(),
+  LayerResult \%>\%
+    dplyr::mutate(Distance2Boundary = Distance2Boundary \%>\% scales::rescale_mid(c(-1, 1), mid = 0)) \%>\%
+    ggplot(aes(X, Y, color = Distance2Boundary)) +
+    geom_point(size = 1) +
+    scale_color_gradient2(low = '#046C9A',
+                          mid = '#FFFFFF',
+                          high = '#CB2314',
+                          midpoint = 0,
+                          limits = c(-1, 1),
+                          name = "Distance to Boundary") +
+    labs(title = "Distance to Boundary") +
+    theme_void() +
+    coord_equal()) +
+  patchwork::plot_layout(guides = "collect")
+print(p)
 }

@@ -2,7 +2,7 @@
 % Please edit documentation in R/GetBoundary.R
 \name{GetBoundary}
 \alias{GetBoundary}
-\title{Get Boundary}
+\title{GetBoundary}
 \usage{
 GetBoundary(
   INPUT,
@@ -13,72 +13,130 @@ GetBoundary(
   CELL_ID_PREFIX,
   ANNO_RANGE = c(0, 1),
   ANNO_MIDPOINT = 0.5,
-  RADIUS = "auto",
-  MEDIAN_NB = 15,
+  NEIGHBOR_METHOD = c("radius", "knn", "hybrid"),
+  RADIUS,
+  KNN_K,
+  DENOISE = TRUE,
   NEST_MIN_SIZE = 5,
   NEST_SPECIFICITY = 0.25,
-  BOUNDARY_SPECIFICITY = 0.05
+  BOUNDARY_SPECIFICITY = 0.05,
+  VERBOSE = FALSE
 )
 }
 \arguments{
-\item{INPUT}{A data frame containing cell coordinates and annotations, where each row represents a cell in one single image.}
+\item{INPUT}{Input data frame containing cell coordinates and annotations, where each row represents a cell in one single image.}
 
-\item{X_POSITION}{The name of the column containing the x-coordinates of the cells.}
+\item{X_POSITION}{Name of X coordinate column.}
 
-\item{Y_POSITION}{The name of the column containing the y-coordinates of the cells.}
+\item{Y_POSITION}{Name of Y coordinate column.}
 
-\item{ANNO_COLUMN}{The name of the column containing the cell annotations, where 1 indicates a tumor/nest cell and 0 indicates a non-tumor/non-nest cell. Can be binary or continuous.}
+\item{ANNO_COLUMN}{Name of annotation column, where 1 indicates cells which constitute nest (i.e. tumor cells if tumor nests are to be identified) and 0 indicates other cells. Can be binary or continuous.}
 
-\item{CELL_ID_COLUMN}{(optional) The name of the column containing unique cell IDs. If not provided, row indices will be used as cell IDs. Default is NULL.}
+\item{CELL_ID_COLUMN}{(optional) Cell ID column. If not provided, row indices will be used as cell IDs. Default NULL.}
 
-\item{CELL_ID_PREFIX}{(optional) The prefix used for creating cell IDs. Default is NULL.}
+\item{CELL_ID_PREFIX}{(optional) Cell ID prefix used for creating cell IDs. Default NULL.}
 
-\item{ANNO_RANGE}{(optional) The range of the cell annotations. Default is c(0, 1).}
+\item{ANNO_RANGE}{Annotation range. Default \link{0, 1}.}
 
-\item{ANNO_MIDPOINT}{(optional) The midpoint of the cell annotation range. Default is 0.5.}
+\item{ANNO_MIDPOINT}{Annotation midpoint. Either numeric value or "auto" to automatically detect using EM-based cutoff determination. Default 0.5.}
 
-\item{RADIUS}{(optional) The radius used for determination of neighbors. If set to 'auto', the radius will be determined automatically. Default is 'auto'.}
+\item{NEIGHBOR_METHOD}{Neighborhood detection method: "radius" (fixed radius), "knn" (k-nearest neighbors), or "hybrid" (kNN within radius). Default "radius".}
 
-\item{MEDIAN_NB}{(optional) Used when RADIUS is set to 'auto' to determine the minimal radius that suffices the profiling of cell neighborhood. Default 15.}
+\item{RADIUS}{Neighborhood radius (required for "radius" and "hybrid" methods).}
 
-\item{NEST_MIN_SIZE}{(optional) The minimum size of cell nests, recommended between 5 and 10. Default is 5.}
+\item{KNN_K}{Number of nearest neighbors (required for "knn" and "hybrid" methods).}
 
-\item{NEST_SPECIFICITY}{(optional) The specificity of nest cell detection, recommended between 0.1 and 0.4. Default is 0.25. This is the minimal frequency of neighboring tumor cells for the definition of a nest cell. Higher nest specificity results in less nest cells detected.}
+\item{DENOISE}{Whether to perform noise removal (TRUE) or keep all cells (FALSE). Default TRUE.}
 
-\item{BOUNDARY_SPECIFICITY}{(optional) The specificity of boundary cell detection, recommended between 0.01 and 0.1. Default is 0.05. Higher boundary specificity results in less boundary cells detected.}
+\item{NEST_MIN_SIZE}{Minimum nest size. Default 5.}
+
+\item{NEST_SPECIFICITY}{Nest specificity. Default 0.25, recommended between 0.1 and 0.4.}
+
+\item{BOUNDARY_SPECIFICITY}{Boundary specificity. Default 0.05, recommended between 0.01 and 0.1.}
 }
 \value{
 A data frame with the following columns:
 \describe{
-\item{CELL_ID}{The unique identifier for each cell.}
-\item{X_POSITION}{The x-coordinate of the cell.}
-\item{Y_POSITION}{The y-coordinate of the cell.}
-\item{ANNOTATION}{The original cell annotation (1 for tumor, 0 for non-tumor).}
-\item{BOUNDARY}{A logical value indicating whether the cell is part of the tumor boundary (TRUE) or not (FALSE).}
+\item{CELL_ID}{Cell ID column.}
+\item{X_POSITION}{X coordinate column.}
+\item{Y_POSITION}{Y coordinate column.}
+\item{ANNO_COLUMN}{Original cell annotation column.}
+\item{Nb_Count}{Number of neighbors considered.}
+\item{BoundaryScore}{Boundary Score}
+\item{SynoraAnnotation}{Synora annotation column containing 'Boundary', 'Nest', 'Outside' and 'Noise'}
 }
 }
 \description{
-This function takes a data frame of cell coordinates and annotations and returns a data frame with the tumor boundary annotation.
+Detect Boundary Cells
 }
 \examples{
-data <- data.frame(
-  Cell_ID = 1:100,
-  X_position = rnorm(100, 50, 10),
-  Y_position = rnorm(100, 50, 10),
-  CT0 = sample(c(0, 1), 100, replace = TRUE)
-)
+library(tidyverse)
+library(patchwork)
+library(Synora)
 
-boundary_df <- GetBoundary(
-  INPUT = data,
-  X_POSITION = 'X_position',
-  Y_POSITION = 'Y_position',
-  ANNO_COLUMN = 'CT0',
+# Generate Dummy Data
+set.seed(123)
+DummyData <- tidyr::expand_grid(X = seq(-1, 1, length.out = 65),
+                                Y = seq(-1, 1, length.out = 65)) \%>\%
+  dplyr::mutate(R = 0.8,
+                Sinusoid = 0.4,
+                theta = 2 * atan(Y / (X + sqrt(X ^ 2 + Y ^ 2))),
+                theta = ifelse(is.na(theta), pi, theta),
+                CT = (X / R - Sinusoid * cos(theta) * sin(12 * theta)) ^ 2 +
+                  (Y / R - Sinusoid * sin(theta) * sin(12 * theta)) ^ 2 < 1) \%>\%
+  dplyr::mutate(CT = ifelse(CT & (as.logical(runif(n = nrow(.)) \%/\% 0.75)), !CT, CT) \%>\%
+                  as.numeric()) \%>\%
+  dplyr::mutate(X = 250 * X + rnorm(n = nrow(.)),
+                Y = 250 * Y + rnorm(n = nrow(.))) \%>\%
+  dplyr::mutate(X = X \%>\% pmax(-250) \%>\% pmin(250),
+                Y = Y \%>\% pmax(-250) \%>\% pmin(250)) \%>\%
+  dplyr::mutate(Cell_ID = paste0('Cell_', sprintf('\%05.f', dplyr::row_number())))
+set.seed(NULL)
+
+# Run GetBoundary
+BoundaryResult <- Synora::GetBoundary(
+  INPUT = DummyData,
+  X_POSITION = 'X',
+  Y_POSITION = 'Y',
+  ANNO_COLUMN = 'CT',
   CELL_ID_COLUMN = 'Cell_ID',
-  RADIUS = 'auto',
+  RADIUS = 20,
   NEST_SPECIFICITY = 0.25,
   BOUNDARY_SPECIFICITY = 0.05
 )
 
-# Visualize the tumor boundary
-plot(boundary_df$X_POSITION, boundary_df$Y_POSITION, col = ifelse(boundary_df$BOUNDARY, 'red', 'black'), pch = 16)
+# Visualization
+p <- patchwork::wrap_plots(
+  DummyData \%>\%
+    ggplot(aes(X, Y, color = as.factor(CT))) +
+    geom_point(size = 1) +
+    scale_color_manual(name = 'Cell Type',
+                       values = c(`0` = '#e9c46a', `1` = '#046C9A'),
+                       labels = c('Non-tumor cell', 'Tumor cell')) +
+    labs(title = 'Cell Type') +
+    theme_void() +
+    coord_equal(),
+  BoundaryResult \%>\%
+    dplyr::mutate(BoundaryScore = pmin(BoundaryScore, 0.5)) \%>\%
+    ggplot(aes(X, Y, color = BoundaryScore)) +
+    geom_point(size = 1) +
+    scale_color_gradient2(low = '#046C9A',
+                          mid = '#FFFFFF',
+                          high = '#CB2314',
+                          midpoint = 0.25,
+                          limits = c(0, 0.5),
+                          name = "Boundary Score") +
+    labs(title = "Boundary Score") +
+    theme_void() +
+    coord_equal(),
+  BoundaryResult \%>\%
+    ggplot(aes(X, Y, color = factor(SynoraAnnotation))) +
+    geom_point(size = 1) +
+    scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
+                       name = "Synora Annotation") +
+    labs(title = "Synora Annotation") +
+    theme_void() +
+    coord_equal()) +
+  patchwork::plot_layout(guides = "collect")
+print(p)
 }
