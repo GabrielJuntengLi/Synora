@@ -1,4 +1,4 @@
-**Synora: A Vector-based Boundary Detection Tool for Spatial Omics**.
+# **Synora: A Vector-based Boundary Detection Tool for Spatial Omics**
 
 Synora is an R package for accurate identification and characterization of tissue boundaries in spatial omics data. It uses a novel vector-based approach to distinguish true tissue interfaces from regions of cellular infiltration, requiring only cell coordinates and binary annotations.
 
@@ -43,7 +43,7 @@ Synora is broadly applicable to any tissue interface, enabling:
 
 
  
-# Quick Start
+## Quick Start
 ```r
 library(Synora)
 
