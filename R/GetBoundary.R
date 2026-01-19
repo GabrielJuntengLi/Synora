@@ -26,6 +26,7 @@
 #'   \item{SynoraAnnotation}{Synora annotation column containing 'Boundary', 'Nest', 'Outside' and 'Noise'}
 #' }
 #' @export
+#' @importFrom magrittr `%>%`
 #' @examples
 #' library(tidyverse)
 #' library(patchwork)

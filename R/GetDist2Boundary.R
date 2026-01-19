@@ -26,6 +26,7 @@
 #'   \item{Distance2Boundary}{Euclidean distance to boundary cell(s) (could be negative if DIRECTION applied).}
 #' }
 #' @export
+#' @importFrom magrittr `%>%`
 #' @examples
 #' library(tidyverse)
 #' library(patchwork)

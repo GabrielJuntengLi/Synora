@@ -39,6 +39,7 @@
 #' @export
 #' @importFrom dplyr filter transmute mutate select arrange as_tibble
 #' @importFrom purrr map set_names
+#' @importFrom magrittr `%>%`
 #' @importFrom concaveman concaveman
 #' @importFrom sf st_polygon st_area
 #' @importFrom dbscan kNN

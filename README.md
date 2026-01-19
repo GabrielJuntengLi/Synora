@@ -41,6 +41,8 @@ Synora is broadly applicable to any tissue interface, enabling:
   - Inflammatory lesion interfaces
   - Spatial gradient analysis across any tissue compartment
 
+
+ 
 ## Quick Start
 ```r
 library(Synora)
