@@ -50,7 +50,7 @@ data("DummyData")
 
 # 1. Detect boundaries
 BoundaryResultList <- DummyData %>% 
-    purrr::map(.progress = T, ~ GetBoundary(
+    purrr::map(.progress = T, ~ Synora::GetBoundary(
         INPUT = .x,
         CELL_ID_COLUMN = 'Cell_ID',
         X_POSITION = 'X',
@@ -63,7 +63,7 @@ BoundaryResultList <- DummyData %>%
     
 # 2. Calculate distances
 DistanceResultList <- BoundaryResultList %>% 
-    purrr::map(.progress = T, ~ GetDist2Boundary(
+    purrr::map(.progress = T, ~ Synora::GetDist2Boundary(
         INPUT = .x,
         CELL_ID_COLUMN = 'Cell_ID',
         X_POSITION = 'X',
@@ -74,7 +74,7 @@ DistanceResultList <- BoundaryResultList %>%
 
 # 3. Extract shape metrics
 ShapeResultList <- BoundaryResultList %>% 
-    purrr::map(.progress = T, ~ GetShapeMetrics(
+    purrr::map(.progress = T, ~ Synora::GetShapeMetrics(
         INPUT = .x,
         CELL_ID_COLUMN = 'Cell_ID',
         X_POSITION = 'X',
