@@ -6,7 +6,7 @@
 #' @param ANNO_COLUMN Name of annotation column, where 1 indicates cells which constitute nest (i.e. tumor cells if tumor nests are to be identified) and 0 indicates other cells. Can be binary or continuous.
 #' @param CELL_ID_COLUMN (optional) Cell ID column. If not provided, row indices will be used as cell IDs. Default NULL.
 #' @param CELL_ID_PREFIX (optional) Cell ID prefix used for creating cell IDs. Default NULL.
-#' @param ANNO_RANGE Annotation range. Default [0, 1].
+#' @param ANNO_RANGE Annotation range. Default between 0 and 1.
 #' @param ANNO_MIDPOINT Annotation midpoint. Either numeric value or "auto" to automatically detect using EM-based cutoff determination. Default 0.5.
 #' @param NEIGHBOR_METHOD Neighborhood detection method: "radius" (fixed radius), "knn" (k-nearest neighbors), or "hybrid" (kNN within radius). Default "radius".
 #' @param RADIUS Neighborhood radius (required for "radius" and "hybrid" methods).

@@ -36,7 +36,7 @@ GetBoundary(
 
 \item{CELL_ID_PREFIX}{(optional) Cell ID prefix used for creating cell IDs. Default NULL.}
 
-\item{ANNO_RANGE}{Annotation range. Default \link{0, 1}.}
+\item{ANNO_RANGE}{Annotation range. Default between 0 and 1.}
 
 \item{ANNO_MIDPOINT}{Annotation midpoint. Either numeric value or "auto" to automatically detect using EM-based cutoff determination. Default 0.5.}
 
