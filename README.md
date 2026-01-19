@@ -18,7 +18,7 @@ devtools::install_github("GabrielJuntengLi/Synora")
 ```
 
 ## How Synora Works & Applications
-![Rationale of Synora](https://github.com/GabrielJuntengLi/Synora/blob/main/Synora_Figure.png)
+![Rationale of Synora](https://github.com/GabrielJuntengLi/Synora/blob/main/Synora_Figure.jpg)
 ### The Challenge
 Traditional methods using cellular heterogeneity (Mixedness) alone cannot distinguish between:
 - True boundaries: spatially segregated cell types (e.g., tumor-stroma interface)
