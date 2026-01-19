@@ -46,38 +46,84 @@ Synora is broadly applicable to any tissue interface, enabling:
 ## Quick Start
 ```r
 library(Synora)
+data("DummyData")
 
 # 1. Detect boundaries
-boundary_result <- GetBoundary(
-  INPUT = your_data,
-  X_POSITION = 'X',
-  Y_POSITION = 'Y',
-  ANNO_COLUMN = 'CellType',
-  CELL_ID_COLUMN = 'Cell_ID',
-  RADIUS = 20,
-  NEST_SPECIFICITY = 0.25,
-  BOUNDARY_SPECIFICITY = 0.05
-)
-
+BoundaryResultList <- DummyData %>% 
+    purrr::map(.progress = T, ~ GetBoundary(
+        INPUT = .x,
+        CELL_ID_COLUMN = 'Cell_ID',
+        X_POSITION = 'X',
+        Y_POSITION = 'Y',
+        ANNO_COLUMN = 'CT',
+        RADIUS = 20,
+        NEST_SPECIFICITY = 0.25,
+        BOUNDARY_SPECIFICITY = 0.05
+    ))
+    
 # 2. Calculate distances
-distance_result <- GetDist2Boundary(
-  INPUT = boundary_result,
-  CELL_ID_COLUMN = 'Cell_ID',
-  X_POSITION = 'X',
-  Y_POSITION = 'Y',
-  ANNO_COLUMN = 'SynoraAnnotation',
-  ANNO_OF_BOUNDARY = 'Boundary'
-)
+DistanceResultList <- BoundaryResultList %>% 
+    purrr::map(.progress = T, ~ GetDist2Boundary(
+        INPUT = .x,
+        CELL_ID_COLUMN = 'Cell_ID',
+        X_POSITION = 'X',
+        Y_POSITION = 'Y',
+        ANNO_COLUMN = 'SynoraAnnotation',
+        ANNO_OF_BOUNDARY = 'Boundary'
+    ))
 
 # 3. Extract shape metrics
-shape_metrics <- GetShapeMetrics(
-  INPUT = boundary_result,
-  CELL_ID_COLUMN = 'Cell_ID',
-  X_POSITION = 'X',
-  Y_POSITION = 'Y',
-  ANNO_COLUMN = 'SynoraAnnotation',
-  SHAPE_METRICS = c('Boundary2NestRatio')
-)
+ShapeResultList <- BoundaryResultList %>% 
+    purrr::map(.progress = T, ~ GetShapeMetrics(
+        INPUT = .x,
+        CELL_ID_COLUMN = 'Cell_ID',
+        X_POSITION = 'X',
+        Y_POSITION = 'Y',
+        ANNO_COLUMN = 'SynoraAnnotation',
+        SHAPE_METRICS = c('Boundary2NestRatio')
+    )) %>% 
+    tibble::enframe(name = 'PerlinFrequency', value = 'BNR') %>% 
+    tidyr::unnest(BNR) %>% 
+    tidyr::unnest(BNR)
+
+# 4. Visualization
+PlotList <- list()
+for (i in 1:length(DummyData)) {
+  p1 <- DummyData[[i]] %>%
+    ggplot2::ggplot(ggplot2::aes(X, Y, color = as.factor(CT))) +
+    ggplot2::geom_point(size = 1) +
+    ggplot2::scale_color_manual(name = 'Cell Type',
+                                values = c(`0` = '#e9c46a', `1` = '#046C9A'),
+                                labels = c('Non-tumor cell', 'Tumor cell')) +
+    ggplot2::theme_void() +
+    ggplot2::labs(title = names(DummyData)[[i]]) +
+    # ggplot2::theme(axis.title = ggplot2::element_text()) +
+    ggplot2::coord_equal()
+  p2 <- DistanceResultList[[i]] %>%
+    ggplot2::ggplot(ggplot2::aes(X, Y, color = factor(SynoraAnnotation))) +
+    ggplot2::geom_point(size = 1) +
+    ggplot2::scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
+                                name = "Synora Annotation") +
+    ggplot2::theme_void() +
+    ggplot2::coord_equal()
+  
+  p3 <- DistanceResultList[[i]] %>%
+    dplyr::mutate(Distance2Boundary = Distance2Boundary %>% scales::rescale_mid(c(-1, 1), mid = 0)) %>%
+    ggplot2::ggplot(ggplot2::aes(X, Y, color = Distance2Boundary)) +
+    ggplot2::geom_point(size = 1) +
+    ggplot2::scale_color_gradient2(low = '#046C9A',
+                                   mid = '#FFFFFF',
+                                   high = '#CB2314',
+                                   midpoint = 0,
+                                   limits = c(-1, 1),
+                                   name = "Distance to Boundary") +
+    ggplot2::theme_void() +
+    ggplot2::coord_equal()
+  PlotList[[i]] <- patchwork::wrap_plots(ncol = 1, list(p1, p2, p3))
+}
+FinalPlot <- PlotList %>% 
+  patchwork::wrap_plots(nrow = 1, guides = 'collect', axis_titles = 'collect')
+print(FinalPlot)
 
 ```
 

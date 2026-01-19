@@ -163,36 +163,36 @@ GetDist2Boundary <- function(INPUT, X_POSITION, Y_POSITION,
                      !!as.name(X_POSITION),
                      !!as.name(Y_POSITION),
                      !!as.name(ANNO_COLUMN),
-                     Distance2Boundary = NA,
-                     # kNN_ID = NULL,
-                     # kNN_dist = NULL
-                     )
+                     Distance2Boundary = NA)
 
   if (sum(INPUT[[ANNO_COLUMN]] == ANNO_OF_BOUNDARY, na.rm = T) > 1) {
-    RESULT <- INPUT %>%
+    RESULT1 <- INPUT %>%
       dplyr::transmute(Cell_ID = !!as.name(CELL_ID_COLUMN),
                        X = !!as.name(X_POSITION),
                        Y = !!as.name(Y_POSITION),
                        Anno = !!as.name(ANNO_COLUMN)) %>%
       dplyr::mutate(Query = Anno != ANNO_OF_BOUNDARY) %>%
       dplyr::nest_by(Query) %>%
-      dplyr::mutate(INPUT_kNN = data %>% dplyr::transmute(X, Y) %>% list()) %T>%
-      {kNN_RESULT <<- dbscan::kNN(
-        x = .$INPUT_kNN[[1]],
-        query = .$INPUT_kNN[[2]],
-        k = min(K, nrow(.$INPUT_kNN[[1]]) - 1))} %T>%
-      {kNN_ID <<- kNN_RESULT$id; kNN_ID[] <<- .$data[[1]]$Cell_ID[c(kNN_ID)]} %>%
+      dplyr::mutate(INPUT_kNN = data %>% dplyr::transmute(X, Y) %>% list())
+    
+    
+    kNN_RESULT <- dbscan::kNN(
+      x = RESULT1$INPUT_kNN[[1]],
+      query = RESULT1$INPUT_kNN[[2]],
+      k = min(K, nrow(RESULT1$INPUT_kNN[[1]]) - 1))
+    
+    kNN_ID <- kNN_RESULT$id
+    kNN_ID[] <- RESULT1$data[[1]]$Cell_ID[c(kNN_ID)]
+
+    RESULT <- RESULT1 %>% 
       dplyr::mutate(Distance2Boundary = kNN_RESULT$dist %>% rowMeans() %>% list(),
                     kNN_ID = kNN_ID %>% {unname(as.list(as.data.frame(t(.))))} %>% list(),
                     kNN_dist = kNN_RESULT$dist %>% {unname(as.list(as.data.frame(t(.))))} %>% list()) %>%
       dplyr::ungroup() %>%
       dplyr::transmute(data,
                        Distance2Boundary = ifelse(Query, Distance2Boundary, 0),
-                       # kNN_ID = ifelse(Query, kNN_ID, NA),
-                       # kNN_dist = ifelse(Query, kNN_dist, NA)
                        ) %>%
-      tidyr::unnest(cols = c(data, Distance2Boundary#, kNN_ID, kNN_dist
-                             )) %>%
+      tidyr::unnest(cols = c(data, Distance2Boundary)) %>%
       dplyr::arrange(Cell_ID) %>%
       dplyr::rename(!!as.name(CELL_ID_COLUMN) := Cell_ID,
                     !!as.name(X_POSITION) := X,
