@@ -1,6 +1,6 @@
 # **Synora: Spatial Tissue Architecture Analysis for Omics Data**
 
-Synora is an R package that resolves tissue architecture in spatial omics data — enabling downstream analyses that depend on knowing *where* a cell is relative to a tissue boundary, not just *what type* it is.
+Synora — named after the Greek term for boundary — is an R package that resolves tissue architecture in spatial omics data. Rather than simply classifying cell types, Synora quantifies biologically meaningful interfaces, enabling downstream analyses that depend on knowing *where* a cell is relative to a tissue boundary, not just *what type* it is.
 
 By accurately identifying tissue interfaces using a novel vector-based approach, Synora unlocks a new axis of biological inquiry: **spatial context**.
 
