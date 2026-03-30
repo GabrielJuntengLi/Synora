@@ -1,7 +1,7 @@
 # .OtsuThreshold ----
 #' @title OtsuThreshold
 #' @description Find optimal threshold using Otsu's method by maximizing
-#'   inter-class variance. Replaces the EM-based .FindCutoff().
+#'   inter-class variance.
 #' @param data Numeric vector.
 #' @param n_bins Number of histogram bins for discretization. Default 256.
 #' @return A single numeric threshold value.
