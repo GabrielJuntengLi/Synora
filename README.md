@@ -54,7 +54,7 @@ devtools::install_github("GabrielJuntengLi/Synora")
 
 ## How Synora Works
 
-![Rationale of Synora](https://github.com/GabrielJuntengLi/Synora/blob/main/Synora_Figure.jpg)
+![Rationale of Synora](https://github.com/GabrielJuntengLi/Synora/blob/main/Synora_Figure.png)
 
 ### The Challenge
 Traditional methods using cellular heterogeneity (Mixedness) alone cannot distinguish between:
