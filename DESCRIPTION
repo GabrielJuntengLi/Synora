@@ -22,7 +22,8 @@ Imports:
     spatstat.geom,
     spatstat.explore,
     deldir,
-    tidygraph
+    tidygraph,
+    magrittr
 Depends: 
     R (>= 3.5)
 LazyData: true

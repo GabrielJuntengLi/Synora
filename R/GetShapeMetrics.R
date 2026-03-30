@@ -381,7 +381,7 @@ GetShapeMetrics <- function(INPUT, X_POSITION, Y_POSITION,
       })
   } else {
     warning("Not enough valid nest cells for separation")
-    RESULT <- list() %>% setNames(character(0))
+    RESULT <- list() %>% stats::setNames(character(0))
   }
   return(RESULT)
 }
