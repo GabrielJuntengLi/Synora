@@ -1,438 +1,487 @@
+# .OtsuThreshold ----
+#' @title OtsuThreshold
+#' @description Find optimal threshold using Otsu's method by maximizing
+#'   inter-class variance. Replaces the EM-based .FindCutoff().
+#' @param data Numeric vector.
+#' @param n_bins Number of histogram bins for discretization. Default 256.
+#' @return A single numeric threshold value.
+#' @keywords internal
+.OtsuThreshold <- function(data, n_bins = 256) {
+  tryCatch({
+    data <- data[is.finite(data)]
+    if (length(unique(data)) < 2) {
+      message("Insufficient variation for Otsu thresholding, returning median")
+      return(median(data))
+    }
+    
+    breaks    <- seq(min(data), max(data), length.out = n_bins + 1)
+    h         <- graphics::hist(data, breaks = breaks, plot = FALSE)
+    bin_mids  <- h$mids
+    p         <- h$counts / sum(h$counts)
+    
+    best_thresh <- bin_mids[1]
+    best_var    <- -Inf
+    
+    for (i in seq_len(length(p) - 1)) {
+      w0 <- sum(p[seq_len(i)])
+      w1 <- sum(p[(i + 1):length(p)])
+      if (w0 == 0 || w1 == 0) next
+      
+      mu0 <- sum(p[seq_len(i)]        * bin_mids[seq_len(i)])        / w0
+      mu1 <- sum(p[(i + 1):length(p)] * bin_mids[(i + 1):length(p)]) / w1
+      
+      var_between <- w0 * w1 * (mu0 - mu1)^2
+      if (var_between > best_var) {
+        best_var    <- var_between
+        # Use midpoint between adjacent bin centres ≈ true inter-bin boundary
+        best_thresh <- (bin_mids[i] + bin_mids[i + 1]) / 2
+      }
+    }
+    return(best_thresh)
+    
+  }, error = function(e) {
+    message("Otsu fallback to median: ", e$message)
+    median(data)
+  })
+}
+
+
+
+# .GetNeighbors ----
+#' @title GetNeighbors
+#' @description Unified neighbor detection. Returns a list with elements
+#'   \code{id} (list of integer vectors), \code{dist} (list of numeric vectors),
+#'   and \code{radius} (scalar, effective neighborhood radius).
+#' @param COORDS Two-column numeric matrix or data frame (X, Y).
+#' @param NEIGHBOR_METHOD One of \code{"radius"}, \code{"knn"}, \code{"hybrid"}.
+#' @param RADIUS Radius threshold (required for \code{"radius"} / \code{"hybrid"}).
+#' @param KNN_K Number of nearest neighbors (required for \code{"knn"} / \code{"hybrid"}).
+#' @return A named list: \code{id}, \code{dist}, \code{radius}.
+#' @keywords internal
+.GetNeighbors <- function(COORDS,
+                          NEIGHBOR_METHOD = c("radius", "knn", "hybrid"),
+                          RADIUS = NULL,
+                          KNN_K  = NULL) {
+  NEIGHBOR_METHOD <- match.arg(NEIGHBOR_METHOD)
+  COORDS <- as.data.frame(COORDS)
+  
+  if (NEIGHBOR_METHOD == "radius") {
+    nn     <- dbscan::frNN(COORDS, eps = RADIUS, sort = FALSE)
+    id     <- nn$id
+    dist   <- nn$dist
+    radius <- RADIUS
+    
+  } else if (NEIGHBOR_METHOD == "knn") {
+    nn     <- dbscan::kNN(COORDS, k = KNN_K, sort = FALSE)
+    radius <- stats::quantile(nn$dist[, KNN_K], 0.75)
+    id     <- split(nn$id,   seq(nrow(nn$id)))
+    dist   <- split(nn$dist, seq(nrow(nn$dist)))
+    
+  } else if (NEIGHBOR_METHOD == "hybrid") {
+    nn         <- dbscan::kNN(COORDS, k = KNN_K, sort = FALSE)
+    valid_mask <- nn$dist <= RADIUS
+    id   <- lapply(seq_len(nrow(nn$id)),   \(i) nn$id[i,   valid_mask[i, ]])
+    dist <- lapply(seq_len(nrow(nn$dist)), \(i) nn$dist[i, valid_mask[i, ]])
+    radius <- RADIUS
+  }
+  
+  return(list(id = id, dist = dist, radius = radius))
+}
+
+
+
+# .GetMO ----
+#' @title GetMO
+#' @description Compute per-cell Mixedness and Orientedness scores.
+#' @inheritParams GetBoundary
+#' @param NN Pre-computed neighbor list from \code{.GetNeighbors()}.
+#' @param ORIENTEDNESS Logical; whether to compute Orientedness. Default TRUE.
+#' @keywords internal
+.GetMO <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
+                   ANNO_COLUMN, NN, ORIENTEDNESS = TRUE) {
+  
+  INPUT_SLIM <- INPUT %>%
+    dplyr::transmute(
+      Cell_ID = !!as.name(CELL_ID_COLUMN),
+      X       = !!as.name(X_POSITION),
+      Y       = !!as.name(Y_POSITION),
+      Anno    = !!as.name(ANNO_COLUMN)
+    )
+  
+  NeighborhoodRadius <- NN$radius
+  
+  if (ORIENTEDNESS) {
+    RESULT <- INPUT_SLIM %>%
+      dplyr::mutate(ID   = NN$id,
+                    Dist = NN$dist) %>%
+      dplyr::rowwise() %>%
+      dplyr::mutate(
+        X_u      = list((.$X[ID] - X) / Dist),
+        Y_u      = list((.$Y[ID] - Y) / Dist),
+        Nb_Anno  = list(.$Anno[ID])
+      ) %>%
+      dplyr::mutate(
+        Nb_Count    = length(Nb_Anno),
+        Mean_Anno   = mean(Nb_Anno),
+        X_u_SumBg   = sum(X_u),
+        Y_u_SumBg   = sum(Y_u),
+        X_u_Sum     = sum(Nb_Anno * X_u),
+        Y_u_Sum     = sum(Nb_Anno * Y_u)
+      ) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(
+        Mixedness    = 1 - (Mean_Anno)^2,
+        Orientedness = ((sqrt(X_u_Sum^2 + Y_u_Sum^2) -
+                           sqrt(X_u_SumBg^2 + Y_u_SumBg^2)) / Nb_Count),
+        Orientedness = ifelse(Orientedness < 0, 0, Orientedness),
+        NeighborhoodRadius = NeighborhoodRadius
+      ) %>%
+      dplyr::select(Cell_ID, X, Y, Anno, Nb_Count,
+                    NeighborhoodRadius, Mean_Anno, Mixedness, Orientedness)
+    
+  } else {
+    RESULT <- INPUT_SLIM %>%
+      dplyr::mutate(ID = NN$id) %>%
+      dplyr::rowwise() %>%
+      dplyr::mutate(Nb_Anno = list(.$Anno[ID])) %>%
+      dplyr::mutate(
+        Nb_Count  = length(Nb_Anno),
+        Mean_Anno = mean(Nb_Anno)
+      ) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(
+        Mixedness          = 1 - (Mean_Anno)^2,
+        NeighborhoodRadius = NeighborhoodRadius
+      ) %>%
+      dplyr::select(Cell_ID, X, Y, Anno, Nb_Count,
+                    NeighborhoodRadius, Mean_Anno, Mixedness)
+  }
+  
+  RESULT <- RESULT %>%
+    dplyr::rename(
+      !!as.name(CELL_ID_COLUMN) := Cell_ID,
+      !!as.name(X_POSITION)     := X,
+      !!as.name(Y_POSITION)     := Y,
+      !!as.name(ANNO_COLUMN)    := Anno
+    )
+  
+  return(RESULT)
+}
+
+
+# .StratifyBoundary ----
+#' @title StratifyBoundary
+#' @description For each Boundary cell, examine the \code{SynoraAnnotation}
+#'   of its neighbors and re-label it as \code{Boundary_Inner} (majority
+#'   neighbors are Nest) or \code{Boundary_Outer} (majority neighbors are
+#'   Outside). Ties default to \code{Boundary_Inner}.
+#'
+#'   Note: "Inner/Outer" refers to spatial position relative to the nest interior
+#'
+#' @param RESULT Data frame output from the main annotation step, already in
+#'   final row order (sorted by \code{CELL_ID_COLUMN}), containing
+#'   \code{SynoraAnnotation}.
+#' @param NN Pre-computed neighbor list from \code{.GetNeighbors()}, whose
+#'   row order matches \code{RESULT}.
+#' @return \code{RESULT} with \code{Boundary} replaced by
+#'   \code{Boundary_Inner} or \code{Boundary_Outer} in
+#'   \code{SynoraAnnotation}.
+#' @keywords internal
+.StratifyBoundary <- function(RESULT, NN) {
+  
+  anno_vec     <- as.character(RESULT$SynoraAnnotation)
+  boundary_idx <- which(anno_vec == "Boundary")
+  
+  new_levels <- c("Boundary_Inner", "Boundary_Outer", "Nest", "Outside", "Noise")
+  
+  if (length(boundary_idx) == 0) {
+    RESULT <- RESULT %>%
+      dplyr::mutate(
+        SynoraAnnotation = factor(anno_vec, levels = new_levels)
+      )
+    return(RESULT)
+  }
+  
+  # For each Boundary cell, tally Nest vs Outside among its neighbors
+  new_labels <- vapply(boundary_idx, function(i) {
+    nb_anno   <- anno_vec[NN$id[[i]]]
+    n_nest    <- sum(nb_anno == "Nest",    na.rm = TRUE)
+    n_outside <- sum(nb_anno == "Outside", na.rm = TRUE)
+    if (n_nest >= n_outside) "Boundary_Inner" else "Boundary_Outer"
+  }, character(1))
+  
+  anno_vec[boundary_idx] <- new_labels
+  
+  RESULT <- RESULT %>%
+    dplyr::mutate(
+      SynoraAnnotation = factor(anno_vec, levels = new_levels)
+    )
+  
+  return(RESULT)
+}
+
+
+
+# GetBoundary ----
 #' @title GetBoundary
-#' @description Detect Boundary Cells
-#' @param INPUT Input data frame containing cell coordinates and annotations, where each row represents a cell in one single image.
+#' @description Detect and annotate boundary cells in spatial cell data.
+#'
+#' @param INPUT Input data frame; each row is one cell from a single image.
 #' @param X_POSITION Name of X coordinate column.
 #' @param Y_POSITION Name of Y coordinate column.
-#' @param ANNO_COLUMN Name of annotation column, where 1 indicates cells which constitute nest (i.e. tumor cells if tumor nests are to be identified) and 0 indicates other cells. Can be binary or continuous.
-#' @param CELL_ID_COLUMN (optional) Cell ID column. If not provided, row indices will be used as cell IDs. Default NULL.
-#' @param CELL_ID_PREFIX (optional) Cell ID prefix used for creating cell IDs. Default NULL.
-#' @param ANNO_RANGE Annotation range. Default between 0 and 1.
-#' @param ANNO_MIDPOINT Annotation midpoint. Either numeric value or "auto" to automatically detect using EM-based cutoff determination. Default 0.5.
-#' @param NEIGHBOR_METHOD Neighborhood detection method: "radius" (fixed radius), "knn" (k-nearest neighbors), or "hybrid" (kNN within radius). Default "radius".
-#' @param RADIUS Neighborhood radius (required for "radius" and "hybrid" methods).
-#' @param KNN_K Number of nearest neighbors (required for "knn" and "hybrid" methods).
-#' @param DENOISE Whether to perform noise removal (TRUE) or keep all cells (FALSE). Default TRUE.
-#' @param NEST_MIN_SIZE Minimum nest size. Default 5.
-#' @param NEST_SPECIFICITY Nest specificity. Default 0.25, recommended between 0.1 and 0.4.
-#' @param BOUNDARY_SPECIFICITY Boundary specificity. Default 0.05, recommended between 0.01 and 0.1.
-#' @return A data frame with the following columns:
+#' @param ANNO_COLUMN Numeric annotation column: 1 = nest cell, 0 = other.
+#'   May be binary or continuous.
+#' @param CELL_ID_COLUMN (optional) Cell ID column name. Row indices used if
+#'   omitted. Default NULL.
+#' @param CELL_ID_PREFIX (optional) Prefix for auto-generated cell IDs.
+#'   Default NULL.
+#' @param ANNO_RANGE Annotation range. Default \code{c(0, 1)}.
+#' @param ANNO_MIDPOINT Annotation midpoint. Numeric or \code{"auto"} (Otsu
+#'   thresholding). Default \code{0.5}.
+#' @param NEIGHBOR_METHOD Neighborhood method: \code{"radius"},
+#'   \code{"knn"}, or \code{"hybrid"}. Default \code{"radius"}.
+#' @param RADIUS Neighborhood radius (required for \code{"radius"} /
+#'   \code{"hybrid"}).
+#' @param KNN_K Number of nearest neighbors (required for \code{"knn"} /
+#'   \code{"hybrid"}).
+#' @param DENOISE Logical; perform iterative DBSCAN noise removal.
+#'   Default \code{TRUE}.
+#' @param NEST_MIN_SIZE Minimum cluster size for denoising. Default \code{5}.
+#' @param NEST_SPECIFICITY Nest membership threshold. Default \code{0.25}.
+#' @param BOUNDARY_SPECIFICITY Boundary score threshold. Default \code{0.05}.
+#' @param STRATIFY_BOUNDARY Logical; whether to further sub-classify each
+#'   Boundary cell as \code{Boundary_Inner} (nestward) or
+#'   \code{Boundary_Outer} (outward-facing) based on neighbor composition.
+#'   Default \code{TRUE}.
+#' @param VERBOSE Logical; print diagnostic messages. Default \code{FALSE}.
+#'
+#' @return A data frame with columns:
 #' \describe{
-#'   \item{CELL_ID}{Cell ID column.}
-#'   \item{X_POSITION}{X coordinate column.}
-#'   \item{Y_POSITION}{Y coordinate column.}
-#'   \item{ANNO_COLUMN}{Original cell annotation column.}
-#'   \item{Nb_Count}{Number of neighbors considered.}
-#'   \item{BoundaryScore}{Boundary Score}
-#'   \item{SynoraAnnotation}{Synora annotation column containing 'Boundary', 'Nest', 'Outside' and 'Noise'}
+#'   \item{CELL_ID}{Cell ID.}
+#'   \item{X_POSITION}{X coordinate.}
+#'   \item{Y_POSITION}{Y coordinate.}
+#'   \item{ANNO_COLUMN}{Original annotation.}
+#'   \item{Nb_Count}{Number of neighbors.}
+#'   \item{Anno_Midpoint}{Midpoint used for scaling.}
+#'   \item{Mixedness}{Mixedness score.}
+#'   \item{Orientedness}{Orientedness score.}
+#'   \item{BoundaryScore}{Mixedness × Orientedness.}
+#'   \item{SynoraAnnotation}{Factor: \code{Boundary_Inner},
+#'     \code{Boundary_Outer}, \code{Nest}, \code{Outside}, \code{Noise}
+#'     (when \code{STRATIFY_BOUNDARY = TRUE}); or \code{Boundary},
+#'     \code{Nest}, \code{Outside}, \code{Noise} otherwise.}
 #' }
 #' @export
-#' @importFrom magrittr `%>%`
-#' @examples
-#' library(tidyverse)
-#' library(patchwork)
-#' library(Synora)
-#'
-#' # Generate Dummy Data
-#' set.seed(123)
-#' DummyData <- tidyr::expand_grid(X = seq(-1, 1, length.out = 65),
-#'                                 Y = seq(-1, 1, length.out = 65)) %>%
-#'   dplyr::mutate(R = 0.8,
-#'                 Sinusoid = 0.4,
-#'                 theta = 2 * atan(Y / (X + sqrt(X ^ 2 + Y ^ 2))),
-#'                 theta = ifelse(is.na(theta), pi, theta),
-#'                 CT = (X / R - Sinusoid * cos(theta) * sin(12 * theta)) ^ 2 +
-#'                   (Y / R - Sinusoid * sin(theta) * sin(12 * theta)) ^ 2 < 1) %>%
-#'   dplyr::mutate(CT = ifelse(CT & (as.logical(runif(n = nrow(.)) %/% 0.75)), !CT, CT) %>%
-#'                   as.numeric()) %>%
-#'   dplyr::mutate(X = 250 * X + rnorm(n = nrow(.)),
-#'                 Y = 250 * Y + rnorm(n = nrow(.))) %>%
-#'   dplyr::mutate(X = X %>% pmax(-250) %>% pmin(250),
-#'                 Y = Y %>% pmax(-250) %>% pmin(250)) %>%
-#'   dplyr::mutate(Cell_ID = paste0('Cell_', sprintf('%05.f', dplyr::row_number())))
-#' set.seed(NULL)
-#'
-#' # Run GetBoundary
-#' BoundaryResult <- Synora::GetBoundary(
-#'   INPUT = DummyData,
-#'   X_POSITION = 'X',
-#'   Y_POSITION = 'Y',
-#'   ANNO_COLUMN = 'CT',
-#'   CELL_ID_COLUMN = 'Cell_ID',
-#'   RADIUS = 20,
-#'   NEST_SPECIFICITY = 0.25,
-#'   BOUNDARY_SPECIFICITY = 0.05
-#' )
-#'
-#' # Visualization
-#' p <- patchwork::wrap_plots(
-#'   DummyData %>%
-#'     ggplot(aes(X, Y, color = as.factor(CT))) +
-#'     geom_point(size = 1) +
-#'     scale_color_manual(name = 'Cell Type',
-#'                        values = c(`0` = '#e9c46a', `1` = '#046C9A'),
-#'                        labels = c('Non-tumor cell', 'Tumor cell')) +
-#'     labs(title = 'Cell Type') +
-#'     theme_void() +
-#'     coord_equal(),
-#'   BoundaryResult %>%
-#'     dplyr::mutate(BoundaryScore = pmin(BoundaryScore, 0.5)) %>%
-#'     ggplot(aes(X, Y, color = BoundaryScore)) +
-#'     geom_point(size = 1) +
-#'     scale_color_gradient2(low = '#046C9A',
-#'                           mid = '#FFFFFF',
-#'                           high = '#CB2314',
-#'                           midpoint = 0.25,
-#'                           limits = c(0, 0.5),
-#'                           name = "Boundary Score") +
-#'     labs(title = "Boundary Score") +
-#'     theme_void() +
-#'     coord_equal(),
-#'   BoundaryResult %>%
-#'     ggplot(aes(X, Y, color = factor(SynoraAnnotation))) +
-#'     geom_point(size = 1) +
-#'     scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
-#'                        name = "Synora Annotation") +
-#'     labs(title = "Synora Annotation") +
-#'     theme_void() +
-#'     coord_equal()) +
-#'   patchwork::plot_layout(guides = "collect")
-#' print(p)
-
-GetBoundary <- function(INPUT, X_POSITION, `Y_POSITION`,
+GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
                         ANNO_COLUMN, CELL_ID_COLUMN, CELL_ID_PREFIX,
                         ANNO_RANGE = c(0, 1), ANNO_MIDPOINT = 0.5,
                         NEIGHBOR_METHOD = c("radius", "knn", "hybrid"),
                         RADIUS, KNN_K,
-                        DENOISE = TRUE,
-                        NEST_MIN_SIZE = 5, NEST_SPECIFICITY = 0.25,
+                        DENOISE             = TRUE,
+                        NEST_MIN_SIZE       = 5,
+                        NEST_SPECIFICITY    = 0.25,
                         BOUNDARY_SPECIFICITY = 0.05,
-                        VERBOSE = FALSE) {
-  if (missing(INPUT)) stop("INPUT data frame must be provided")
+                        STRATIFY_BOUNDARY   = TRUE,
+                        VERBOSE             = FALSE) {
+  
+  # 1. Input validation ----
+  if (missing(INPUT))        stop("INPUT data frame must be provided")
   if (!is.data.frame(INPUT)) stop("INPUT must be a data frame")
-  if (missing(X_POSITION) || missing(Y_POSITION)) stop("Both X_POSITION and Y_POSITION column names must be provided")
-  if (!X_POSITION %in% names(INPUT)) stop("X_POSITION: `\033[1;4;41m", X_POSITION, "\033[0m` not found in INPUT")
-  if (!Y_POSITION %in% names(INPUT)) stop("Y_POSITION: `\033[1;4;41m", Y_POSITION, "\033[0m` not found in INPUT")
+  if (missing(X_POSITION) || missing(Y_POSITION))
+    stop("Both X_POSITION and Y_POSITION column names must be provided")
+  if (!X_POSITION %in% names(INPUT))
+    stop("X_POSITION: `\033[1;4;41m", X_POSITION, "\033[0m` not found in INPUT")
+  if (!Y_POSITION %in% names(INPUT))
+    stop("Y_POSITION: `\033[1;4;41m", Y_POSITION, "\033[0m` not found in INPUT")
+  
   if (missing(CELL_ID_COLUMN)) {
-    message('Creating Cell_ID...')
-    if (missing(CELL_ID_PREFIX)) {
-      INPUT <- INPUT %>% dplyr::mutate(Cell_ID = dplyr::row_number())
+    message("Creating Cell_ID...")
+    INPUT <- if (missing(CELL_ID_PREFIX)) {
+      INPUT %>% dplyr::mutate(Cell_ID = dplyr::row_number())
     } else {
-      INPUT <- INPUT %>% dplyr::mutate(Cell_ID = paste0(CELL_ID_PREFIX, '_', dplyr::row_number()))
+      INPUT %>% dplyr::mutate(Cell_ID = paste0(CELL_ID_PREFIX, "_",
+                                               dplyr::row_number()))
     }
-    CELL_ID_COLUMN <- 'Cell_ID'
+    CELL_ID_COLUMN <- "Cell_ID"
   } else if (!CELL_ID_COLUMN %in% names(INPUT)) {
     stop("Specified CELL_ID_COLUMN not found in INPUT")
   }
+  
   if (missing(ANNO_COLUMN)) stop("ANNO_COLUMN must be provided")
-  if (!ANNO_COLUMN %in% names(INPUT)) stop("ANNO_COLUMN: `\033[1;4;41m", ANNO_COLUMN, "\033[0m` not found in INPUT")
-  if (!is.numeric(INPUT[[ANNO_COLUMN]])) stop("ANNO_COLUMN must be a numeric. Convert to numeric first")
-  if (any(is.na(INPUT[[ANNO_COLUMN]]) | is.nan(INPUT[[ANNO_COLUMN]]) | is.infinite(INPUT[[ANNO_COLUMN]]))) {
+  if (!ANNO_COLUMN %in% names(INPUT))
+    stop("ANNO_COLUMN: `\033[1;4;41m", ANNO_COLUMN, "\033[0m` not found in INPUT")
+  if (!is.numeric(INPUT[[ANNO_COLUMN]]))
+    stop("ANNO_COLUMN must be numeric. Convert to numeric first")
+  if (any(is.na(INPUT[[ANNO_COLUMN]]) | is.nan(INPUT[[ANNO_COLUMN]]) |
+          is.infinite(INPUT[[ANNO_COLUMN]])))
     stop("ANNO_COLUMN contains NA, NaN, or Inf values. Please clean the data first")
-  }
-
+  
   NEIGHBOR_METHOD <- match.arg(NEIGHBOR_METHOD)
-
   if (NEIGHBOR_METHOD %in% c("radius", "hybrid") && missing(RADIUS))
     stop("RADIUS required for this method")
   if (NEIGHBOR_METHOD %in% c("knn", "hybrid") && missing(KNN_K))
     stop("KNN_K required for this method")
-  if (NEIGHBOR_METHOD == "radius") {
-    if (!is.numeric(RADIUS) || RADIUS <= 0)
-      stop("RADIUS must be positive numeric")
-  }
-  if (NEIGHBOR_METHOD %in% c("knn", "hybrid")) {
-    if (!is.numeric(KNN_K) || KNN_K <= 0 || KNN_K != as.integer(KNN_K))
-      stop("KNN_K must be positive integer")
-  }
-
-  neighbor_params <- list(
-    method = NEIGHBOR_METHOD,
-    radius = if (NEIGHBOR_METHOD %in% c("radius", "hybrid")) RADIUS else NULL,
-    knn_k = if (NEIGHBOR_METHOD %in% c("knn", "hybrid")) KNN_K else NULL
-  )
-
-
+  if (NEIGHBOR_METHOD == "radius" && (!is.numeric(RADIUS) || RADIUS <= 0))
+    stop("RADIUS must be a positive numeric")
+  if (NEIGHBOR_METHOD %in% c("knn", "hybrid") &&
+      (!is.numeric(KNN_K) || KNN_K <= 0 || KNN_K != as.integer(KNN_K)))
+    stop("KNN_K must be a positive integer")
+  
+  INPUT <- INPUT %>% dplyr::arrange(!!as.name(CELL_ID_COLUMN))
+  
   if (!identical(ANNO_RANGE, "auto")) {
-    if (!is.numeric(ANNO_RANGE) || length(ANNO_RANGE) != 2 || ANNO_RANGE[1] >= ANNO_RANGE[2]) {
-      stop("ANNO_RANGE must be 'auto' or numeric vector of length 2 with min < max")
-    }
+    if (!is.numeric(ANNO_RANGE) || length(ANNO_RANGE) != 2 ||
+        ANNO_RANGE[1] >= ANNO_RANGE[2])
+      stop("ANNO_RANGE must be 'auto' or a numeric vector of length 2 with min < max")
   } else {
-    if (!is.numeric(INPUT[[ANNO_COLUMN]])) stop("ANNO_COLUMN must be numeric for automatic range detection")
-    ANNO_RANGE <- c(min(INPUT[[ANNO_COLUMN]], na.rm = TRUE), max(INPUT[[ANNO_COLUMN]], na.rm = TRUE))
-
+    ANNO_RANGE <- range(INPUT[[ANNO_COLUMN]], na.rm = TRUE)
     if (diff(ANNO_RANGE) == 0) {
       warning("ANNO_COLUMN has zero range, adjusting with epsilon")
       ANNO_RANGE <- ANNO_RANGE + c(-1e-6, 1e-6)
     }
   }
-
+  
   if (!(is.numeric(ANNO_MIDPOINT) && length(ANNO_MIDPOINT) == 1) &&
-      ANNO_MIDPOINT != "auto") {
-    stop("ANNO_MIDPOINT must be either numeric or 'auto'")
-  }
-
-  if (ANNO_MIDPOINT == "auto") {
-    captured <- capture.output({
-      ANNO_MIDPOINT <- .FindCutoff(INPUT[[ANNO_COLUMN]])
-    }, type = "output")
-
-    auto_msg <- paste0(
-      if (length(captured) > 0) paste0(paste0(captured, collapse = " "), " | "),
-      "Automatically detected ANNO_MIDPOINT: ",
-      round(ANNO_MIDPOINT, 3),
-      ' [', round(ANNO_RANGE[1], 3), ',', round(ANNO_RANGE[2], 3), ']'
-    )
-
-    if (VERBOSE) message(auto_msg)
-
+      !identical(ANNO_MIDPOINT, "auto"))
+    stop("ANNO_MIDPOINT must be either a single numeric or 'auto'")
+  
+  if (identical(ANNO_MIDPOINT, "auto")) {
+    ANNO_MIDPOINT <- .OtsuThreshold(INPUT[[ANNO_COLUMN]])
+    if (VERBOSE)
+      message("Otsu-detected ANNO_MIDPOINT: ", round(ANNO_MIDPOINT, 3),
+              " [", round(ANNO_RANGE[1], 3), ", ", round(ANNO_RANGE[2], 3), "]")
     if (!dplyr::between(ANNO_MIDPOINT, ANNO_RANGE[1], ANNO_RANGE[2])) {
-      warning("Auto-detected midpoint outside ANNO_RANGE, using range midpoint")
+      warning("Otsu midpoint outside ANNO_RANGE, using range midpoint")
       ANNO_MIDPOINT <- mean(ANNO_RANGE)
     }
   }
-
+  
+  ANNO_SCALED <- paste0(ANNO_COLUMN, "_scaled")
   INPUT <- INPUT %>%
     dplyr::mutate(
-      !!as.name(paste0(ANNO_COLUMN, '_scaled')) := ifelse(
+      !!as.name(ANNO_SCALED) := ifelse(
         !!as.name(ANNO_COLUMN) >= ANNO_MIDPOINT,
         (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_RANGE[2] - ANNO_MIDPOINT),
         (!!as.name(ANNO_COLUMN) - ANNO_MIDPOINT) / (ANNO_MIDPOINT - ANNO_RANGE[1])
       )
     )
 
-
+  NN <- .GetNeighbors(
+    COORDS          = INPUT %>% dplyr::select(all_of(c(X_POSITION, Y_POSITION))),
+    NEIGHBOR_METHOD = NEIGHBOR_METHOD,
+    RADIUS          = if (NEIGHBOR_METHOD %in% c("radius", "hybrid")) RADIUS else NULL,
+    KNN_K           = if (NEIGHBOR_METHOD %in% c("knn",    "hybrid")) KNN_K  else NULL
+  )
+  
+  ANNO_DENOISED <- paste0(ANNO_COLUMN, "_denoised")
+  
   if (DENOISE) {
-    RESULT_1 <-INPUT %>%
+    
+    # --- 6a. First pass: get Mean_Anno to decide Nest membership ----
+    RESULT_1 <- INPUT %>%
       .GetMO(CELL_ID_COLUMN = CELL_ID_COLUMN,
-             X_POSITION = X_POSITION,
-             Y_POSITION = Y_POSITION,
-             ANNO_COLUMN = paste0(ANNO_COLUMN, '_scaled'),
-             NEIGHBOR_METHOD = neighbor_params$method,
-             RADIUS = neighbor_params$radius,
-             KNN_K = neighbor_params$knn_k,
-             ORIENTEDNESS = FALSE) %>%
+             X_POSITION    = X_POSITION,
+             Y_POSITION    = Y_POSITION,
+             ANNO_COLUMN   = ANNO_SCALED,
+             NN            = NN,
+             ORIENTEDNESS  = FALSE) %>%
       dplyr::mutate(Nest = (0.5 * Mean_Anno + 0.5) >= NEST_SPECIFICITY)
-
+    
+    # --- 6b. Iterative DBSCAN denoising -----------------------------
     NOISE_COUNT <- c()
     i <- 1
-    while (T) {
+    repeat {
       RESULT_1 <- RESULT_1 %>%
         dplyr::nest_by(Nest, NeighborhoodRadius) %>%
-        dplyr::mutate(!!as.name(paste0('Noise_', i)) := data %>%
-                        dplyr::select(all_of(c(X_POSITION, Y_POSITION))) %>%
-                        dbscan::dbscan(eps = NeighborhoodRadius, minPts = NEST_MIN_SIZE) %>%
-                        .$cluster %>%
-                        {. == 0} %>%
-                        list()) %>%
-        tidyr::unnest(cols = c(data, !!as.name(paste0('Noise_', i))))  %>%
+        dplyr::mutate(
+          !!as.name(paste0("Noise_", i)) :=
+            data %>%
+            dplyr::select(all_of(c(X_POSITION, Y_POSITION))) %>%
+            dbscan::dbscan(eps = NeighborhoodRadius, minPts = NEST_MIN_SIZE) %>%
+            .$cluster %>%
+            { . == 0 } %>%
+            list()
+        ) %>%
+        tidyr::unnest(cols = c(data, !!as.name(paste0("Noise_", i)))) %>%
         dplyr::ungroup() %>%
         dplyr::bind_rows() %>%
-        dplyr::mutate(Nest = ifelse(!!as.name(paste0('Noise_', i)), !Nest, Nest))
-      NOISE_COUNT <- c(NOISE_COUNT, sum(RESULT_1[[paste0('Noise_', i)]]))
-
-      if (ifelse(length(NOISE_COUNT) == 1, NOISE_COUNT == 0, diff(tail(NOISE_COUNT, 2)) == 0)) {
+        dplyr::arrange(!!as.name(CELL_ID_COLUMN)) %>% 
+        dplyr::mutate(Nest = ifelse(!!as.name(paste0("Noise_", i)), !Nest, Nest))
+      
+      NOISE_COUNT <- c(NOISE_COUNT, sum(RESULT_1[[paste0("Noise_", i)]]))
+      converged   <- if (length(NOISE_COUNT) == 1) NOISE_COUNT == 0 else
+        diff(tail(NOISE_COUNT, 2)) == 0
+      
+      if (converged) {
         RESULT_1 <- RESULT_1 %>%
-          dplyr::mutate(!!as.name(paste0(ANNO_COLUMN, '_denoised')) := dplyr::case_when(
-            !(!!as.name(paste0('Noise_', i))) & Nest ~ 1,
-            !(!!as.name(paste0('Noise_', i))) & !Nest ~ -1,
-            T ~ NA,
-          ))
+          dplyr::mutate(
+            !!as.name(ANNO_DENOISED) := dplyr::case_when(
+              !(!!as.name(paste0("Noise_", i))) &  Nest ~  1,
+              !(!!as.name(paste0("Noise_", i))) & !Nest ~ -1,
+              TRUE ~ NA_real_
+            )
+          )
         break
-      } else {
-        i <- i + 1
       }
+      i <- i + 1
     }
+    
+    # --- 6c. Second pass: full MO with denoised annotation ----------
     RESULT <- RESULT_1 %>%
       .GetMO(CELL_ID_COLUMN = CELL_ID_COLUMN,
-             X_POSITION = X_POSITION,
-             Y_POSITION = Y_POSITION,
-             ANNO_COLUMN = paste0(ANNO_COLUMN, '_denoised'),
-             NEIGHBOR_METHOD = neighbor_params$method,
-             RADIUS = neighbor_params$radius,
-             KNN_K = neighbor_params$knn_k,
-             ORIENTEDNESS = T) %>%
-      dplyr::mutate(BoundaryScore = Mixedness * Orientedness) %>%
-      dplyr::mutate(SynoraAnnotation := dplyr::case_when(
-        BoundaryScore >= BOUNDARY_SPECIFICITY ~  'Boundary',
-        BoundaryScore < BOUNDARY_SPECIFICITY & !!as.name(paste0(ANNO_COLUMN, '_denoised')) == 1 ~  'Nest',
-        BoundaryScore < BOUNDARY_SPECIFICITY & !!as.name(paste0(ANNO_COLUMN, '_denoised')) == -1 ~  'Outside',
-        T ~  'Noise') %>%
-          forcats::fct_expand('Boundary', 'Nest', 'Outside', 'Noise') %>%
-          forcats::fct_relevel('Boundary', 'Nest', 'Outside', 'Noise')) %>%
-      dplyr::arrange(!!as.name(CELL_ID_COLUMN)) %>%
-      dplyr::left_join(INPUT, ., by = c(CELL_ID_COLUMN, X_POSITION, Y_POSITION)) %>%
-      dplyr::transmute(!!as.name(CELL_ID_COLUMN),
-                       !!as.name(X_POSITION),
-                       !!as.name(Y_POSITION),
-                       !!as.name(ANNO_COLUMN),
-                       Nb_Count,
-                       Anno_Midpoint = ANNO_MIDPOINT,
-                       Mixedness = ifelse(is.na(Mixedness), 0, Mixedness),
-                       Orientedness = ifelse(is.na(Orientedness), 0, Orientedness),
-                       BoundaryScore = ifelse(is.na(BoundaryScore), 0, BoundaryScore),
-                       SynoraAnnotation = SynoraAnnotation)
+             X_POSITION    = X_POSITION,
+             Y_POSITION    = Y_POSITION,
+             ANNO_COLUMN   = ANNO_DENOISED,
+             NN            = NN,
+             ORIENTEDNESS  = TRUE) %>%
+      dplyr::mutate(
+        BoundaryScore    = Mixedness * Orientedness,
+        SynoraAnnotation = dplyr::case_when(
+          BoundaryScore >= BOUNDARY_SPECIFICITY                                    ~ "Boundary",
+          BoundaryScore <  BOUNDARY_SPECIFICITY & !!as.name(ANNO_DENOISED) ==  1   ~ "Nest",
+          BoundaryScore <  BOUNDARY_SPECIFICITY & !!as.name(ANNO_DENOISED) == -1   ~ "Outside",
+          TRUE                                                                     ~ "Noise"
+        ) %>% factor(levels = c("Boundary", "Nest", "Outside", "Noise"))
+      )
+    
   } else {
+    
     RESULT <- INPUT %>%
       .GetMO(CELL_ID_COLUMN = CELL_ID_COLUMN,
-             X_POSITION = X_POSITION,
-             Y_POSITION = Y_POSITION,
-             ANNO_COLUMN = paste0(ANNO_COLUMN, '_scaled'),
-             NEIGHBOR_METHOD = neighbor_params$method,
-             RADIUS = neighbor_params$radius,
-             KNN_K = neighbor_params$knn_k,
-             ORIENTEDNESS = T) %>%
-      dplyr::mutate(BoundaryScore = Mixedness * Orientedness) %>%
-      dplyr::mutate(SynoraAnnotation := dplyr::case_when(
-        BoundaryScore >= BOUNDARY_SPECIFICITY ~  'Boundary',
-        (0.5 * Mean_Anno + 0.5) >= NEST_SPECIFICITY ~ 'Nest',
-        T ~  'Outside') %>%
-          forcats::fct_expand('Boundary', 'Nest', 'Outside', 'Noise') %>%
-          forcats::fct_relevel('Boundary', 'Nest', 'Outside', 'Noise')) %>%
-      dplyr::arrange(!!as.name(CELL_ID_COLUMN)) %>%
-      dplyr::left_join(INPUT, ., by = c(CELL_ID_COLUMN, X_POSITION, Y_POSITION)) %>%
-      dplyr::transmute(!!as.name(CELL_ID_COLUMN),
-                       !!as.name(X_POSITION),
-                       !!as.name(Y_POSITION),
-                       !!as.name(ANNO_COLUMN),
-                       Nb_Count,
-                       Anno_Midpoint = ANNO_MIDPOINT,
-                       Mixedness = ifelse(is.na(Mixedness), 0, Mixedness),
-                       Orientedness = ifelse(is.na(Orientedness), 0, Orientedness),
-                       BoundaryScore = ifelse(is.na(BoundaryScore), 0, BoundaryScore),
-                       SynoraAnnotation = SynoraAnnotation)
-  }
-  return(RESULT)
-}
-
-#' @inheritParams GetBoundary
-#' @keywords internal
-.GetMO <- function(INPUT, CELL_ID_COLUMN, X_POSITION, Y_POSITION,
-                   ANNO_COLUMN, NEIGHBOR_METHOD = c("radius", "knn", "hybrid"),
-                   RADIUS = NULL, KNN_K = NULL, ORIENTEDNESS = TRUE) {
-
-  NEIGHBOR_METHOD <- match.arg(NEIGHBOR_METHOD)
-
-  INPUT <- INPUT %>%
-    dplyr::transmute(Cell_ID = !!as.name(CELL_ID_COLUMN),
-                     X = !!as.name(X_POSITION),
-                     Y = !!as.name(Y_POSITION),
-                     Anno = !!as.name(ANNO_COLUMN))
-
-  if (NEIGHBOR_METHOD == "radius") {
-    NN <- INPUT %>%
-      dplyr::select(X, Y) %>%
-      dbscan::frNN(eps = RADIUS, sort = FALSE)
-    NeighborhoodRadius <- RADIUS
-  }
-  else if (NEIGHBOR_METHOD == "knn") {
-    NN <- INPUT %>%
-      dplyr::select(X, Y) %>%
-      dbscan::kNN(k = KNN_K, sort = FALSE)
-    NeighborhoodRadius <- stats::quantile(NN$dist[, KNN_K], 0.75)
-    NN <- list(id = split(NN$id, seq(nrow(NN$id))),
-               dist = split(NN$dist, seq(nrow(NN$dist))))
-  }
-  else if (NEIGHBOR_METHOD == "hybrid") {
-    NN <- INPUT %>%
-      dplyr::select(X, Y) %>%
-      dbscan::kNN(k = KNN_K, sort = FALSE)
-    valid_mask <- NN$dist <= RADIUS
-    NN <- list(
-      id = lapply(1:nrow(NN$id), \(i) NN$id[i, valid_mask[i, ]]),
-      dist = lapply(1:nrow(NN$dist), \(i) NN$dist[i, valid_mask[i, ]])
-    )
-    NeighborhoodRadius <- RADIUS
-  }
-
-  if (ORIENTEDNESS) {
-    RESULT <- INPUT %>%
-      dplyr::mutate(ID = NN$id,
-                    Dist = NN$dist) %>%
-      dplyr::rowwise() %>%
-      dplyr::mutate(X_u = list((.$X[ID] - X) / Dist),
-                    Y_u = list((.$Y[ID] - Y) / Dist),
-                    Nb_Anno = list(.$Anno[ID])) %>%
-      dplyr::mutate(Nb_Count = length(Nb_Anno),
-                    Mean_Anno = mean(Nb_Anno),
-                    X_u_SumBg = sum(X_u),
-                    Y_u_SumBg = sum(Y_u),
-                    X_u_Sum = sum(Nb_Anno * X_u),
-                    Y_u_Sum = sum(Nb_Anno * Y_u)) %>%
-      dplyr::ungroup() %>%
-      dplyr::mutate(Mixedness = 1 -(Mean_Anno) ^ 2) %>%
-      dplyr::mutate(Orientedness = ((sqrt(X_u_Sum ^ 2 + Y_u_Sum ^ 2) - sqrt(X_u_SumBg ^ 2 + Y_u_SumBg ^ 2)) / Nb_Count)) %>%
-      dplyr::mutate(Orientedness = ifelse(Orientedness < 0, 0, Orientedness)) %>%
-      dplyr::mutate(NeighborhoodRadius = NeighborhoodRadius) %>%
-      dplyr::select(Cell_ID, X, Y, Anno, Nb_Count, NeighborhoodRadius, Mean_Anno, Mixedness, Orientedness) %>%
-      dplyr::rename(!!as.name(CELL_ID_COLUMN) := Cell_ID,
-                    !!as.name(X_POSITION) := X,
-                    !!as.name(Y_POSITION) := Y,
-                    !!as.name(ANNO_COLUMN) := Anno)
-  } else {
-    RESULT <- INPUT %>%
-      dplyr::mutate(ID = NN$id) %>%
-      dplyr::rowwise() %>%
-      dplyr::mutate(Nb_Anno = list(.$Anno[ID])) %>%
-      dplyr::mutate(Nb_Count = length(Nb_Anno),
-                    Mean_Anno = mean(Nb_Anno)) %>%
-      dplyr::ungroup() %>%
-      dplyr::mutate(Mixedness = 1 - (Mean_Anno) ^ 2) %>%
-      dplyr::mutate(NeighborhoodRadius = NeighborhoodRadius) %>%
-      dplyr::select(Cell_ID, X, Y, Anno, Nb_Count, NeighborhoodRadius, Mean_Anno, Mixedness) %>%
-      dplyr::rename(!!as.name(CELL_ID_COLUMN) := Cell_ID,
-                    !!as.name(X_POSITION) := X,
-                    !!as.name(Y_POSITION) := Y,
-                    !!as.name(ANNO_COLUMN) := Anno)
-  }
-  return(RESULT)
-}
-
-.FindCutoff <- function(data, maxit = 1000, eps = 1e-6, seed = 123) {
-  tryCatch({
-    set.seed(seed)
-
-    if (length(unique(data)) < 5 || sd(data) < 1e-3) {
-      message("Insufficient variation for bimodal detection")
-      return(median(data))
-    }
-
-    suppressWarnings({
-      mix <- mixtools::normalmixEM(
-        data, k = 2,
-        maxit = maxit,
-        epsilon = eps
+             X_POSITION    = X_POSITION,
+             Y_POSITION    = Y_POSITION,
+             ANNO_COLUMN   = ANNO_SCALED,
+             NN            = NN,
+             ORIENTEDNESS  = TRUE) %>%
+      dplyr::mutate(
+        BoundaryScore    = Mixedness * Orientedness,
+        SynoraAnnotation = dplyr::case_when(
+          BoundaryScore >= BOUNDARY_SPECIFICITY                    ~ "Boundary",
+          (0.5 * Mean_Anno + 0.5) >= NEST_SPECIFICITY             ~ "Nest",
+          TRUE                                                     ~ "Outside"
+        ) %>% factor(levels = c("Boundary", "Nest", "Outside", "Noise"))
       )
-    })
-
-    if (mix$mu[1] > mix$mu[2]) {
-      mu <- mix$mu[2:1]
-      sigma <- mix$sigma[2:1]
-    } else {
-      mu <- mix$mu
-      sigma <- mix$sigma
-    }
-
-    search_min <- max(min(data), mu[1] - 2 * sigma[1])
-    search_max <- min(max(data), mu[2] + 2 * sigma[2])
-
-    if (search_min >= search_max) {
-      message("Overlapping search range, using midpoint between modes")
-      return(mean(mu))
-    }
-
-    f <- function(x) dnorm(x, mu[1], sigma[1]) - dnorm(x, mu[2], sigma[2])
-
-    if (f(search_min) * f(search_max) >= 0) {
-      message("No sign change detected, using weighted average")
-      return((mu[1] * sigma[2] + mu[2] * sigma[1]) / (sigma[1] + sigma[2]))
-    }
-
-    uniroot(f, interval = c(search_min, search_max),
-            extendInt = "yes", tol = .Machine$double.eps^0.5)$root
-  }, error = function(e) {
-    message("Fallback to median: ", e$message)
-    median(data)
-  })
+    
+  }
+  
+  RESULT <- dplyr::left_join(INPUT, RESULT,
+                             by = c(CELL_ID_COLUMN, X_POSITION, Y_POSITION)) %>%
+    dplyr::transmute(
+      !!as.name(CELL_ID_COLUMN),
+      !!as.name(X_POSITION),
+      !!as.name(Y_POSITION),
+      !!as.name(ANNO_COLUMN),
+      Nb_Count,
+      Anno_Midpoint = ANNO_MIDPOINT,
+      Mixedness     = ifelse(is.na(Mixedness),    0, Mixedness),
+      Orientedness  = ifelse(is.na(Orientedness), 0, Orientedness),
+      BoundaryScore = ifelse(is.na(BoundaryScore), 0, BoundaryScore),
+      SynoraAnnotation
+    )
+  
+  if (STRATIFY_BOUNDARY) {
+    RESULT <- .StratifyBoundary(RESULT = RESULT, NN = NN)
+  }
+  
+  return(RESULT)
 }
-
-
