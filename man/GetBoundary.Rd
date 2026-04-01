@@ -11,6 +11,7 @@ GetBoundary(
   ANNO_COLUMN,
   CELL_ID_COLUMN,
   CELL_ID_PREFIX,
+  SAMPLE_COLUMN = NULL,
   ANNO_RANGE = c(0, 1),
   ANNO_MIDPOINT = 0.5,
   NEIGHBOR_METHOD = c("radius", "knn", "hybrid"),
@@ -25,14 +26,14 @@ GetBoundary(
 )
 }
 \arguments{
-\item{INPUT}{Input data frame; each row is one cell from a single image.}
+\item{INPUT}{A data frame or a named/unnamed list of data frames.}
 
 \item{X_POSITION}{Name of X coordinate column.}
 
 \item{Y_POSITION}{Name of Y coordinate column.}
 
-\item{ANNO_COLUMN}{Numeric annotation column: 1 = nest cell, 0 = other.
-May be binary or continuous.}
+\item{ANNO_COLUMN}{Name of annotation column. 1 = cell of interest (e.g.
+tumor), 0 = other. May be binary or continuous.}
 
 \item{CELL_ID_COLUMN}{(optional) Cell ID column name. Row indices used if
 omitted. Default NULL.}
@@ -40,7 +41,12 @@ omitted. Default NULL.}
 \item{CELL_ID_PREFIX}{(optional) Prefix for auto-generated cell IDs.
 Default NULL.}
 
-\item{ANNO_RANGE}{Annotation range. Default \code{c(0, 1)}.}
+\item{SAMPLE_COLUMN}{(optional) Column name identifying samples within a
+single data frame. When provided, the data frame is split by this column
+and each sample is processed independently. Default NULL.}
+
+\item{ANNO_RANGE}{Annotation range. Default \code{c(0, 1)}. Use
+\code{"auto"} to derive from data.}
 
 \item{ANNO_MIDPOINT}{Annotation midpoint. Numeric or \code{"auto"} (Otsu
 thresholding). Default \code{0.5}.}
@@ -54,40 +60,117 @@ thresholding). Default \code{0.5}.}
 \item{KNN_K}{Number of nearest neighbors (required for \code{"knn"} /
 \code{"hybrid"}).}
 
-\item{DENOISE}{Logical; perform iterative DBSCAN noise removal.
-Default \code{TRUE}.}
+\item{DENOISE}{Logical; iterative DBSCAN noise removal. Default \code{TRUE}.}
 
 \item{NEST_MIN_SIZE}{Minimum cluster size for denoising. Default \code{5}.}
 
-\item{NEST_SPECIFICITY}{Nest membership threshold. Default \code{0.25}.}
+\item{NEST_SPECIFICITY}{Nest membership threshold (0-1). Default \code{0.25}.}
 
-\item{BOUNDARY_SPECIFICITY}{Boundary score threshold. Default \code{0.05}.}
+\item{BOUNDARY_SPECIFICITY}{Boundary score threshold (0-1). Default
+\code{0.05}.}
 
-\item{STRATIFY_BOUNDARY}{Logical; whether to further sub-classify each
-Boundary cell as \code{Boundary_Inner} (nestward) or
-\code{Boundary_Outer} (outward-facing) based on neighbor composition.
-Default \code{TRUE}.}
+\item{STRATIFY_BOUNDARY}{Logical; sub-classify Boundary cells into
+\code{Boundary_Inner} (nest-facing) and \code{Boundary_Outer}
+(stroma-facing). Default \code{TRUE}.}
 
-\item{VERBOSE}{Logical; print diagnostic messages. Default \code{FALSE}.}
+\item{VERBOSE}{Logical; print progress messages. Default \code{FALSE}.}
 }
 \value{
-A data frame with columns:
 \describe{
-\item{CELL_ID}{Cell ID.}
-\item{X_POSITION}{X coordinate.}
-\item{Y_POSITION}{Y coordinate.}
-\item{ANNO_COLUMN}{Original annotation.}
+\item{List input}{A named list of data frames, one per input element.}
+\item{Data frame + \code{SAMPLE_COLUMN}}{A single data frame with all
+samples reassembled, retaining the \code{SAMPLE_COLUMN}.}
+\item{Data frame (no \code{SAMPLE_COLUMN})}{A single data frame.}
+}
+Each output data frame contains all original columns plus:
+\describe{
 \item{Nb_Count}{Number of neighbors.}
-\item{Anno_Midpoint}{Midpoint used for scaling.}
-\item{Mixedness}{Mixedness score.}
-\item{Orientedness}{Orientedness score.}
-\item{BoundaryScore}{Mixedness × Orientedness.}
-\item{SynoraAnnotation}{Factor: \code{Boundary_Inner},
-\code{Boundary_Outer}, \code{Nest}, \code{Outside}, \code{Noise}
-(when \code{STRATIFY_BOUNDARY = TRUE}); or \code{Boundary},
-\code{Nest}, \code{Outside}, \code{Noise} otherwise.}
+\item{Anno_Midpoint}{Threshold used for Nest/Outside separation.}
+\item{Mixedness}{Local heterogeneity score.}
+\item{Orientedness}{Synora directional asymmetry metric.}
+\item{BoundaryScore}{Mixedness x Orientedness.}
+\item{SynoraAnnotation}{Factor annotation (see \code{STRATIFY_BOUNDARY}).
+Cells with missing \code{ANNO_COLUMN} values receive \code{NA}.}
 }
 }
 \description{
-Detect and annotate boundary cells in spatial cell data.
+Detect and annotate boundary cells in spatial omics data.
+Supports three input modes:
+\enumerate{
+\item A \strong{list of data frames} — processed per element, returns a
+named list of data frames.
+\item A \strong{single data frame with \code{SAMPLE_COLUMN}} — split by
+sample, processed independently, returns one reassembled data frame.
+\item A \strong{single data frame without \code{SAMPLE_COLUMN}} — treated
+as one sample, returns one data frame.
+}
+}
+\examples{
+library(Synora)
+data("DummyData")
+
+# --- Single data frame (no SAMPLE_COLUMN) ----------------
+result_single <- GetBoundary(
+  INPUT                = DummyData[[1]],
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  RADIUS               = 20,
+  NEST_SPECIFICITY     = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
+head(result_single[, c("Cell_ID", "SynoraAnnotation", "BoundaryScore")])
+
+# --- List of data frames (batch mode) --------------------
+result_list <- GetBoundary(
+  INPUT                = DummyData,          # named list
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  RADIUS               = 20,
+  NEST_SPECIFICITY     = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
+# result_list is a named list; access individual samples:
+table(result_list[["Sample1"]]$SynoraAnnotation)
+
+# --- Single data frame WITH SAMPLE_COLUMN ----------------
+combined_df <- do.call(rbind, lapply(
+  names(DummyData),
+  function(nm) { d <- DummyData[[nm]]; d$Sample <- nm; d }
+))
+result_combined <- GetBoundary(
+  INPUT                = combined_df,
+  SAMPLE_COLUMN        = "Sample",
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  RADIUS               = 20,
+  NEST_SPECIFICITY     = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
+# Returns one reassembled data frame retaining the Sample column
+table(result_combined$Sample, result_combined$SynoraAnnotation)
+
+# --- KNN neighborhood + Otsu midpoint (continuous anno) --
+result_knn <- GetBoundary(
+  INPUT                = DummyData[[1]],
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  NEIGHBOR_METHOD      = "knn",
+  KNN_K                = 10,
+  ANNO_RANGE           = "auto",
+  ANNO_MIDPOINT        = "auto",   # Otsu thresholding
+  NEST_SPECIFICITY     = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05,
+  STRATIFY_BOUNDARY    = TRUE,
+  VERBOSE              = TRUE
+)
+table(result_knn$SynoraAnnotation)
+
 }

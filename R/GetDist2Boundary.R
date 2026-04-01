@@ -1,215 +1,462 @@
+# GetDist2Boundary
 #' @title GetDist2Boundary
-#' @description Calculate Distance to Boundary with Directionality
-#' @param INPUT Input data frame containing cell coordinates and boundary annotations, where each row represents a cell in one single image.
-#' @param X_POSITION Name of X coordinate column.
-#' @param Y_POSITION Name of Y coordinate column.
-#' @param ANNO_COLUMN Name of annotation column with boundary
-#' @param CELL_ID_COLUMN (optional) Cell ID column. If not provided, row indices will be used as cell IDs. Default NULL.
-#' @param CELL_ID_PREFIX (optional) Cell ID prefix used for creating cell IDs. Default NULL.
-#' @param ANNO_COLUMN Name of annotation column containing boundary annotation. Default is "SynoraAnnotation".
-#' @param ANNO_OF_BOUNDARY Annotation value representing boundaries. Default is "Boundary".
-#' @param K Number of nearest boundary neighbors to consider. Default is 5.
-#' @param DIRECTION Named list specifying direction mapping with:
-#'   \itemize{
-#'     \item \code{negative}: Annotation value for negative direction (default: 'Outside')
-#'     \item \code{positive}: Annotation value for positive direction (default: 'Nest')
+#' @description Calculate the distance of each cell to the nearest boundary
+#'   cell(s), with optional signed directionality.
+#'
+#'   Supports three input modes (mirroring \code{GetBoundary}):
+#'   \enumerate{
+#'     \item A \strong{list of data frames} — processed per element, returns a
+#'       named list of data frames.
+#'     \item A \strong{single data frame with \code{SAMPLE_COLUMN}} — split by
+#'       sample, processed independently, returns one reassembled data frame.
+#'     \item A \strong{single data frame without \code{SAMPLE_COLUMN}} — treated
+#'       as one sample, returns one data frame.
 #'   }
-#'   Set to \code{NULL} to ignore directionality
-#' @importFrom dplyr transmute mutate nest_by arrange rename select
-#' @importFrom tidyr unnest
-#' @return A data frame with the following columns:
+#'
+#' @param INPUT A data frame or a named/unnamed list of data frames.
+#' @param X_POSITION Name of the X coordinate column.
+#' @param Y_POSITION Name of the Y coordinate column.
+#' @param ANNO_COLUMN Name of the annotation column containing boundary labels.
+#'   Default \code{"SynoraAnnotation"}.
+#' @param CELL_ID_COLUMN (optional) Cell ID column name. Row indices are used
+#'   if omitted.
+#' @param CELL_ID_PREFIX (optional) Prefix for auto-generated cell IDs.
+#' @param SAMPLE_COLUMN (optional) Column name identifying samples within a
+#'   single data frame. Default \code{NULL}.
+#' @param ANNO_OF_BOUNDARY Annotation value(s) representing boundary cells.
+#'   Accepts a character scalar or vector, e.g.
+#'   \code{c("Boundary_Inner", "Boundary_Outer")} for stratified output.
+#'   Default \code{"Boundary"}. Auto-detection rules:
+#'   \itemize{
+#'     \item If \code{"Boundary"} is not found but both stratified variants are
+#'       present, both are used automatically.
+#'     \item If only one stratified variant is present, only that one is used.
+#'     \item If an explicit vector is supplied and only some values are absent
+#'       in a given sample (common in multi-sample runs), the missing values
+#'       are dropped with a warning and processing continues.
+#'     \item If \emph{all} supplied values are absent, the function stops with
+#'       an error.
+#'   }
+#' @param K Number of nearest boundary neighbors whose distances are averaged.
+#'   Default \code{5}.
+#' @param DIRECTION Named list with elements \code{negative} and
+#'   \code{positive} specifying which annotation values receive negative /
+#'   positive signed distances respectively. Set to \code{NULL} to return
+#'   unsigned distances for all cells. Default
+#'   \code{list(negative = "Outside", positive = "Nest")}.
+#'
+#' @return
+#' All original INPUT columns are preserved. \code{GetDist2Boundary} appends:
 #' \describe{
-#'   \item{CELL_ID}{Cell ID column.}
-#'   \item{X_POSITION}{X coordinate column.}
-#'   \item{Y_POSITION}{Y coordinate column.}
-#'   \item{ANNO_COLUMN}{Cell annotation column containing boundary cells.}
-#'   \item{Distance2Boundary}{Euclidean distance to boundary cell(s) (could be negative if DIRECTION applied).}
+#'   \item{Distance2Boundary}{Mean Euclidean distance to the K nearest boundary
+#'     cells. Signed if \code{DIRECTION} is set. Boundary cells receive
+#'     \code{0}. Cells whose annotation is not covered by \code{DIRECTION}
+#'     (e.g. Noise) receive \code{NA}. Cells with \code{NA} in
+#'     \code{ANNO_COLUMN} receive \code{NA}.}
+#'   \item{Boundary_kNN_IDs}{List-column of length K containing the cell IDs
+#'     of the nearest boundary neighbors. \code{NULL} for boundary cells and
+#'     cells excluded from analysis.}
 #' }
-#' @export
-#' @importFrom magrittr `%>%`
+#' 
 #' @examples
-#' library(tidyverse)
-#' library(patchwork)
 #' library(Synora)
+#' data("DummyData")
 #'
-#' # Generate Dummy Data
-#' set.seed(123)
-#' DummyData <- tidyr::expand_grid(X = seq(-1, 1, length.out = 65),
-#'                                 Y = seq(-1, 1, length.out = 65)) %>%
-#'   dplyr::mutate(R = 0.8,
-#'                 Sinusoid = 0.4,
-#'                 theta = 2 * atan(Y / (X + sqrt(X ^ 2 + Y ^ 2))),
-#'                 theta = ifelse(is.na(theta), pi, theta),
-#'                 CT = (X / R - Sinusoid * cos(theta) * sin(12 * theta)) ^ 2 +
-#'                   (Y / R - Sinusoid * sin(theta) * sin(12 * theta)) ^ 2 < 1) %>%
-#'   dplyr::mutate(CT = ifelse(CT & (as.logical(runif(n = nrow(.)) %/% 0.75)), !CT, CT) %>%
-#'                   as.numeric()) %>%
-#'   dplyr::mutate(X = 250 * X + rnorm(n = nrow(.)),
-#'                 Y = 250 * Y + rnorm(n = nrow(.))) %>%
-#'   dplyr::mutate(X = X %>% pmax(-250) %>% pmin(250),
-#'                 Y = Y %>% pmax(-250) %>% pmin(250)) %>%
-#'   dplyr::mutate(Cell_ID = paste0('Cell_', sprintf('%05.f', dplyr::row_number())))
-#' set.seed(NULL)
-#'
-#' # Run GetBoundary
-#' BoundaryResult <- Synora::GetBoundary(
-#'   INPUT = DummyData,
-#'   X_POSITION = 'X',
-#'   Y_POSITION = 'Y',
-#'   ANNO_COLUMN = 'CT',
-#'   CELL_ID_COLUMN = 'Cell_ID',
-#'   RADIUS = 20,
-#'   NEST_SPECIFICITY = 0.25,
+#' # First annotate boundaries
+#' anno_list <- GetBoundary(
+#'   INPUT                = DummyData,
+#'   CELL_ID_COLUMN       = "Cell_ID",
+#'   X_POSITION           = "X",
+#'   Y_POSITION           = "Y",
+#'   ANNO_COLUMN          = "CT",
+#'   RADIUS               = 20,
+#'   NEST_SPECIFICITY     = 0.25,
 #'   BOUNDARY_SPECIFICITY = 0.05
 #' )
 #'
-#' # Run GetDist2Boundary
-#' LayerResult <- Synora::GetDist2Boundary(
-#'   INPUT = BoundaryResult,
-#'   CELL_ID_COLUMN = 'Cell_ID',
-#'   X_POSITION = 'X',
-#'   Y_POSITION = 'Y',
-#'   ANNO_COLUMN = 'SynoraAnnotation',
-#'   ANNO_OF_BOUNDARY = 'Boundary'
+#' # --- List mode (mirrors GetBoundary list output) ---------
+#' dist_list <- GetDist2Boundary(
+#'   INPUT          = anno_list,
+#'   X_POSITION     = "X",
+#'   Y_POSITION     = "Y",
+#'   CELL_ID_COLUMN = "Cell_ID",
+#'   K              = 5
+#' )
+#' # Each element gains Distance2Boundary and Boundary_kNN_IDs
+#' summary(dist_list[["Sample1"]]$Distance2Boundary)
+#'
+#' # --- Single data frame, signed distances -----------------
+#' dist_single <- GetDist2Boundary(
+#'   INPUT          = anno_list[[1]],
+#'   X_POSITION     = "X",
+#'   Y_POSITION     = "Y",
+#'   CELL_ID_COLUMN = "Cell_ID",
+#'   K              = 5,
+#'   DIRECTION      = list(negative = "Outside", positive = "Nest")
+#' )
+#' hist(dist_single$Distance2Boundary,
+#'      main = "Signed Distance to Boundary", xlab = "Distance")
+#'
+#' # --- Unsigned distances for all cells --------------------
+#' dist_unsigned <- GetDist2Boundary(
+#'   INPUT          = anno_list[[1]],
+#'   X_POSITION     = "X",
+#'   Y_POSITION     = "Y",
+#'   CELL_ID_COLUMN = "Cell_ID",
+#'   K              = 3,
+#'   DIRECTION      = NULL          # no sign applied
 #' )
 #'
-#' # Visualization
-#' p <- patchwork::wrap_plots(
-#'   nrow = 2,
-#'   DummyData %>%
-#'     ggplot(aes(X, Y, color = as.factor(CT))) +
-#'     geom_point(size = 1) +
-#'     scale_color_manual(name = 'Cell Type',
-#'                        values = c(`0` = '#e9c46a', `1` = '#046C9A'),
-#'                        labels = c('Non-tumor cell', 'Tumor cell')) +
-#'     labs(title = 'Cell Type') +
-#'     theme_void() +
-#'     coord_equal(),
-#'   BoundaryResult %>%
-#'     dplyr::mutate(BoundaryScore = pmin(BoundaryScore, 0.5)) %>%
-#'     ggplot(aes(X, Y, color = BoundaryScore)) +
-#'     geom_point(size = 1) +
-#'     scale_color_gradient2(low = '#046C9A',
-#'                           mid = '#FFFFFF',
-#'                           high = '#CB2314',
-#'                           midpoint = 0.25,
-#'                           limits = c(0, 0.5),
-#'                           name = "Boundary Score") +
-#'     labs(title = "Boundary Score") +
-#'     theme_void() +
-#'     coord_equal(),
-#'   BoundaryResult %>%
-#'     ggplot(aes(X, Y, color = factor(SynoraAnnotation))) +
-#'     geom_point(size = 1) +
-#'     scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
-#'                        name = "Synora Annotation") +
-#'     labs(title = "Synora Annotation") +
-#'     theme_void() +
-#'     coord_equal(),
-#'   LayerResult %>%
-#'     dplyr::mutate(Distance2Boundary = Distance2Boundary %>% scales::rescale_mid(c(-1, 1), mid = 0)) %>%
-#'     ggplot(aes(X, Y, color = Distance2Boundary)) +
-#'     geom_point(size = 1) +
-#'     scale_color_gradient2(low = '#046C9A',
-#'                           mid = '#FFFFFF',
-#'                           high = '#CB2314',
-#'                           midpoint = 0,
-#'                           limits = c(-1, 1),
-#'                           name = "Distance to Boundary") +
-#'     labs(title = "Distance to Boundary") +
-#'     theme_void() +
-#'     coord_equal()) +
-#'   patchwork::plot_layout(guides = "collect")
-#' print(p)
-
-GetDist2Boundary <- function(INPUT, X_POSITION, Y_POSITION,
-                             CELL_ID_COLUMN, CELL_ID_PREFIX,
-                             ANNO_COLUMN = 'SynoraAnnotation',
-                             ANNO_OF_BOUNDARY = 'Boundary',
-                             DIRECTION = list(negative = 'Outside', positive = 'Nest'),
-                             K = 5) {
-  if (missing(INPUT)) stop("INPUT data frame must be provided")
-  if (!is.data.frame(INPUT)) stop("INPUT must be a data frame")
-  if (missing(X_POSITION) || missing(Y_POSITION)) stop("Both X_POSITION and Y_POSITION column names must be provided")
-  if (!X_POSITION %in% names(INPUT)) stop("X_POSITION: `\033[1;4;41m", X_POSITION, "\033[0m` not found in INPUT")
-  if (!Y_POSITION %in% names(INPUT)) stop("Y_POSITION: `\033[1;4;41m", Y_POSITION, "\033[0m` not found in INPUT")
-  if (missing(CELL_ID_COLUMN)) {
-    message('Creating Cell_ID...')
-    if (missing(CELL_ID_PREFIX)) {
-      INPUT <- INPUT %>% dplyr::mutate(Cell_ID = dplyr::row_number())
+#' # --- Stratified boundary (Boundary_Inner / Boundary_Outer)
+#' anno_strat <- GetBoundary(
+#'   INPUT                = DummyData[[1]],
+#'   CELL_ID_COLUMN       = "Cell_ID",
+#'   X_POSITION           = "X",
+#'   Y_POSITION           = "Y",
+#'   ANNO_COLUMN          = "CT",
+#'   RADIUS               = 20,
+#'   STRATIFY_BOUNDARY    = TRUE,
+#'   NEST_SPECIFICITY     = 0.25,
+#'   BOUNDARY_SPECIFICITY = 0.05
+#' )
+#' dist_strat <- GetDist2Boundary(
+#'   INPUT              = anno_strat,
+#'   X_POSITION         = "X",
+#'   Y_POSITION         = "Y",
+#'   CELL_ID_COLUMN     = "Cell_ID",
+#'   ANNO_OF_BOUNDARY   = c("Boundary_Inner", "Boundary_Outer"),
+#'   K                  = 5
+#' )
+#' table(dist_strat$SynoraAnnotation, is.na(dist_strat$Distance2Boundary))
+#' 
+#' @export
+#' @importFrom magrittr `%>%`
+GetDist2Boundary <- function(INPUT,
+                             X_POSITION,
+                             Y_POSITION,
+                             ANNO_COLUMN      = "SynoraAnnotation",
+                             CELL_ID_COLUMN,
+                             CELL_ID_PREFIX,
+                             SAMPLE_COLUMN    = NULL,
+                             ANNO_OF_BOUNDARY = "Boundary",
+                             K                = 5,
+                             DIRECTION        = list(negative = "Outside",
+                                                     positive = "Nest")) {
+  
+  FORWARDED_ARGS <- list(
+    X_POSITION       = X_POSITION,
+    Y_POSITION       = Y_POSITION,
+    ANNO_COLUMN      = ANNO_COLUMN,
+    ANNO_OF_BOUNDARY = ANNO_OF_BOUNDARY,
+    K                = K,
+    DIRECTION        = DIRECTION
+  )
+  if (!missing(CELL_ID_COLUMN)) FORWARDED_ARGS$CELL_ID_COLUMN <- CELL_ID_COLUMN
+  if (!missing(CELL_ID_PREFIX)) FORWARDED_ARGS$CELL_ID_PREFIX <- CELL_ID_PREFIX
+  
+  if (is.list(INPUT) && !is.data.frame(INPUT)) {
+    
+    if (length(INPUT) == 0) stop("INPUT list is empty.")
+    
+    non_df <- which(!vapply(INPUT, is.data.frame, logical(1)))
+    if (length(non_df) > 0)
+      stop("INPUT list contains non-data-frame element(s) at position(s): \033[1;4;41m",
+           paste(non_df, collapse = ", "), "\033[0m")
+    
+    if (is.null(names(INPUT))) {
+      message("[Synora] INPUT is an unnamed list. ",
+              "Assigning positional names: Sample_1, Sample_2, ...")
+      INPUT <- purrr::set_names(INPUT, paste0("Sample_", seq_along(INPUT)))
+    } else if (any(names(INPUT) == "")) {
+      blank_idx <- which(names(INPUT) == "")
+      names(INPUT)[blank_idx] <- paste0("Sample_", blank_idx)
+      message("[Synora] Partially unnamed list. Filled blank name(s) at position(s): ",
+              paste(blank_idx, collapse = ", "))
+    }
+    
+    message("[Synora] Mode: List of data frames — ",
+            length(INPUT), " sample(s) detected.")
+    
+    return(purrr::imap(
+      .x        = INPUT,
+      .progress = "[Synora] Processing",
+      .f        = function(df, nm) {
+        tryCatch(
+          do.call(.GetDist2Boundary_Single, c(list(INPUT = df), FORWARDED_ARGS)),
+          error = function(e)
+            stop("Error in sample '\033[1;4;41m", nm, "\033[0m': ",
+                 conditionMessage(e))
+        )
+      }
+    ))
+    
+  } else if (is.data.frame(INPUT)) {
+    
+    if (!is.null(SAMPLE_COLUMN)) {
+      
+      if (!SAMPLE_COLUMN %in% names(INPUT))
+        stop("SAMPLE_COLUMN: `\033[1;4;41m", SAMPLE_COLUMN,
+             "\033[0m` not found in INPUT.")
+      
+      sample_ids <- unique(INPUT[[SAMPLE_COLUMN]])
+      n_samples  <- length(sample_ids)
+      
+      if (n_samples == 1)
+        warning("[Synora] SAMPLE_COLUMN \033[1;4;43m", SAMPLE_COLUMN,
+                "\033[0m has only one unique value ('", sample_ids,
+                "'). Processing as a single sample.", call. = FALSE)
+      
+      message("[Synora] Mode: Data frame with SAMPLE_COLUMN '", SAMPLE_COLUMN,
+              "' — ", n_samples, " sample(s) detected.")
+      
+      return(
+        INPUT %>%
+          base::split(.[[SAMPLE_COLUMN]]) %>%
+          purrr::imap(
+            .progress = "[Synora] Processing",
+            .f = function(df, nm) {
+              tryCatch(
+                do.call(.GetDist2Boundary_Single, c(list(INPUT = df), FORWARDED_ARGS)),
+                error = function(e)
+                  stop("Error in sample '\033[1;4;41m", nm, "\033[0m': ",
+                       conditionMessage(e))
+              )
+            }
+          ) %>%
+          dplyr::bind_rows()
+      )
+      
     } else {
-      INPUT <- INPUT %>% dplyr::mutate(Cell_ID = paste0(CELL_ID_PREFIX, '_', dplyr::row_number()))
+      
+      message("[Synora] Mode: Single data frame.")
+      return(do.call(.GetDist2Boundary_Single, c(list(INPUT = INPUT), FORWARDED_ARGS)))
+      
     }
-    CELL_ID_COLUMN <- 'Cell_ID'
-  } else if (!CELL_ID_COLUMN %in% names(INPUT)) {
-    stop("Specified CELL_ID_COLUMN not found in INPUT")
-  }
-  if (missing(ANNO_COLUMN)) stop("ANNO_COLUMN must be provided")
-  if (!ANNO_COLUMN %in% names(INPUT)) stop("ANNO_COLUMN: `\033[1;4;41m", ANNO_COLUMN, "\033[0m` not found in INPUT")
-
-  if (!missing(DIRECTION) && !is.null(DIRECTION) && !all(is.na(DIRECTION))) {
-    if (!is.list(DIRECTION)) {
-      stop("DIRECTION must be a named list")
-    }
-    if (!all(c("negative", "positive") %in% names(DIRECTION))) {
-      stop("DIRECTION must contain both 'negative' and 'positive' elements")
-    }
-    if (identical(DIRECTION$negative, DIRECTION$positive)) {
-      stop("DIRECTION$negative and DIRECTION$positive cannot be the same value")
-    }
-  }
-  RESULT <- INPUT %>%
-    dplyr::transmute(!!as.name(CELL_ID_COLUMN),
-                     !!as.name(X_POSITION),
-                     !!as.name(Y_POSITION),
-                     !!as.name(ANNO_COLUMN),
-                     Distance2Boundary = NA)
-
-  if (sum(INPUT[[ANNO_COLUMN]] == ANNO_OF_BOUNDARY, na.rm = T) > 1) {
-    RESULT1 <- INPUT %>%
-      dplyr::transmute(Cell_ID = !!as.name(CELL_ID_COLUMN),
-                       X = !!as.name(X_POSITION),
-                       Y = !!as.name(Y_POSITION),
-                       Anno = !!as.name(ANNO_COLUMN)) %>%
-      dplyr::mutate(Query = Anno != ANNO_OF_BOUNDARY) %>%
-      dplyr::nest_by(Query) %>%
-      dplyr::mutate(INPUT_kNN = data %>% dplyr::transmute(X, Y) %>% list())
     
-    
-    kNN_RESULT <- dbscan::kNN(
-      x = RESULT1$INPUT_kNN[[1]],
-      query = RESULT1$INPUT_kNN[[2]],
-      k = min(K, nrow(RESULT1$INPUT_kNN[[1]]) - 1))
-    
-    kNN_ID <- kNN_RESULT$id
-    kNN_ID[] <- RESULT1$data[[1]]$Cell_ID[c(kNN_ID)]
-
-    RESULT <- RESULT1 %>% 
-      dplyr::mutate(Distance2Boundary = kNN_RESULT$dist %>% rowMeans() %>% list(),
-                    kNN_ID = kNN_ID %>% {unname(as.list(as.data.frame(t(.))))} %>% list(),
-                    kNN_dist = kNN_RESULT$dist %>% {unname(as.list(as.data.frame(t(.))))} %>% list()) %>%
-      dplyr::ungroup() %>%
-      dplyr::transmute(data,
-                       Distance2Boundary = ifelse(Query, Distance2Boundary, 0),
-                       ) %>%
-      tidyr::unnest(cols = c(data, Distance2Boundary)) %>%
-      dplyr::arrange(Cell_ID) %>%
-      dplyr::rename(!!as.name(CELL_ID_COLUMN) := Cell_ID,
-                    !!as.name(X_POSITION) := X,
-                    !!as.name(Y_POSITION) := Y,
-                    !!as.name(ANNO_COLUMN) := Anno)
+  } else {
+    stop("INPUT must be a data frame or a list of data frames. ",
+         "Received: \033[1;4;41m", paste(class(INPUT), collapse = ", "), "\033[0m")
   }
-  if (!is.null(DIRECTION) && !all(is.na(DIRECTION))) {
+}
+
+
+# .GetDist2Boundary_Single
+#' @keywords internal
+.GetDist2Boundary_Single <- function(INPUT,
+                                     X_POSITION,
+                                     Y_POSITION,
+                                     ANNO_COLUMN      = "SynoraAnnotation",
+                                     CELL_ID_COLUMN,
+                                     CELL_ID_PREFIX,
+                                     ANNO_OF_BOUNDARY = "Boundary",
+                                     K                = 5,
+                                     DIRECTION        = list(negative = "Outside",
+                                                             positive = "Nest")) {
+  
+  # 1. Input validation ----
+  if (missing(INPUT))        stop("INPUT data frame must be provided.")
+  if (!is.data.frame(INPUT)) stop("INPUT must be a data frame.")
+  if (missing(X_POSITION) || missing(Y_POSITION))
+    stop("Both X_POSITION and Y_POSITION must be provided.")
+  if (!X_POSITION %in% names(INPUT))
+    stop("X_POSITION: `\033[1;4;41m", X_POSITION, "\033[0m` not found in INPUT.")
+  if (!Y_POSITION %in% names(INPUT))
+    stop("Y_POSITION: `\033[1;4;41m", Y_POSITION, "\033[0m` not found in INPUT.")
+  if (!ANNO_COLUMN %in% names(INPUT))
+    stop("ANNO_COLUMN: `\033[1;4;41m", ANNO_COLUMN, "\033[0m` not found in INPUT.")
+  
+  if (missing(CELL_ID_COLUMN)) {
+    INPUT <- if (missing(CELL_ID_PREFIX)) {
+      INPUT %>% dplyr::mutate(Cell_ID = dplyr::row_number())
+    } else {
+      INPUT %>% dplyr::mutate(Cell_ID = paste0(CELL_ID_PREFIX, "_",
+                                               dplyr::row_number()))
+    }
+    CELL_ID_COLUMN <- "Cell_ID"
+  } else {
+    if (!CELL_ID_COLUMN %in% names(INPUT))
+      stop("CELL_ID_COLUMN: `\033[1;4;41m", CELL_ID_COLUMN,
+           "\033[0m` not found in INPUT.")
+    if (any(duplicated(INPUT[[CELL_ID_COLUMN]])))
+      stop("CELL_ID_COLUMN `\033[1;4;41m", CELL_ID_COLUMN,
+           "\033[0m` contains duplicate IDs. IDs must be unique.")
+  }
+  
+  out_cols     <- c("Distance2Boundary", "Boundary_kNN_IDs")
+  existing_out <- intersect(out_cols, names(INPUT))
+  if (length(existing_out) > 0) {
+    warning("Overwriting existing column(s): \033[1;4;43m[",
+            paste(existing_out, collapse = ", "),
+            "]\033[0m. Check if GetDist2Boundary has already been run on this data.",
+            call. = FALSE)
+    INPUT <- INPUT %>% dplyr::select(-dplyr::all_of(existing_out))
+  }
+  
+  if (!is.numeric(K) || length(K) != 1 || K <= 0 || K != as.integer(K))
+    stop("K must be a positive integer. Got: \033[1;4;41m", K, "\033[0m.")
+  
+  # 2. ANNO_OF_BOUNDARY resolution ----
+  anno_vals        <- unique(INPUT[[ANNO_COLUMN]][!is.na(INPUT[[ANNO_COLUMN]])])
+  STRATIFIED_VARIANTS <- c("Boundary_Inner", "Boundary_Outer")
+  
+  if (identical(ANNO_OF_BOUNDARY, "Boundary") && !"Boundary" %in% anno_vals) {
+    detected <- intersect(STRATIFIED_VARIANTS, anno_vals)
+    if (length(detected) == 0)
+      stop("ANNO_OF_BOUNDARY: `\033[1;4;41mBoundary\033[0m` not found in ",
+           "ANNO_COLUMN '", ANNO_COLUMN, "' and no stratified variants ",
+           "(Boundary_Inner / Boundary_Outer) detected either.\n",
+           "  Available values: ", paste(anno_vals, collapse = ", "))
+    if (length(detected) == 1) {
+      message("[Synora] 'Boundary' not found. Using stratified variant '",
+              detected, "' as boundary reference.")
+    } else {
+      message("[Synora] 'Boundary' not found. Using stratified variants [",
+              paste(detected, collapse = ", "), "] as boundary reference.")
+    }
+    ANNO_OF_BOUNDARY <- detected
+    
+  } else {
+    missing_vals <- setdiff(ANNO_OF_BOUNDARY, anno_vals)
+    
+    if (length(missing_vals) == length(ANNO_OF_BOUNDARY)) {
+      stop("ANNO_OF_BOUNDARY value(s) \033[1;4;41m[",
+           paste(missing_vals, collapse = ", "),
+           "]\033[0m not found in ANNO_COLUMN '", ANNO_COLUMN, "'.\n",
+           "  Available values: ", paste(anno_vals, collapse = ", "))
+      
+    } else if (length(missing_vals) > 0) {
+      warning("[Synora] ANNO_OF_BOUNDARY value(s) \033[1;4;43m[",
+              paste(missing_vals, collapse = ", "),
+              "]\033[0m not found in this sample and will be ignored. ",
+              "Using: [", paste(setdiff(ANNO_OF_BOUNDARY, missing_vals),
+                                collapse = ", "), "].",
+              call. = FALSE)
+      ANNO_OF_BOUNDARY <- intersect(ANNO_OF_BOUNDARY, anno_vals)
+    }
+  }
+  
+  # 3. DIRECTION validation ----
+  if (!is.null(DIRECTION)) {
+    if (!is.list(DIRECTION) || !all(c("negative", "positive") %in% names(DIRECTION)))
+      stop("DIRECTION must be a named list with elements 'negative' and 'positive', ",
+           "or NULL.")
+    if (identical(DIRECTION$negative, DIRECTION$positive))
+      stop("DIRECTION$negative and DIRECTION$positive cannot be the same value.")
+    missing_dir <- setdiff(c(DIRECTION$negative, DIRECTION$positive), anno_vals)
+    if (length(missing_dir) > 0)
+      warning("DIRECTION value(s) \033[1;4;43m[",
+              paste(missing_dir, collapse = ", "),
+              "]\033[0m not found in ANNO_COLUMN '", ANNO_COLUMN, "'. ",
+              "Affected cells will receive NA for Distance2Boundary.",
+              call. = FALSE)
+  }
+  
+  # 4. Separate boundary / non-boundary / NA-anno ----
+  na_mask  <- is.na(INPUT[[ANNO_COLUMN]])
+  n_na     <- sum(na_mask)
+  
+  if (n_na > 0)
+    warning("[Synora] ANNO_COLUMN `", ANNO_COLUMN, "` contains ",
+            n_na, " NA value(s). These cells will receive NA for Distance2Boundary.",
+            call. = FALSE)
+  
+  INPUT_VALID    <- INPUT[!na_mask, ]
+  INPUT_NA       <- INPUT[na_mask,  ]
+  
+  is_boundary    <- INPUT_VALID[[ANNO_COLUMN]] %in% ANNO_OF_BOUNDARY
+  BOUNDARY_CELLS <- INPUT_VALID[is_boundary,  ]
+  QUERY_CELLS    <- INPUT_VALID[!is_boundary, ]
+  
+  n_boundary <- nrow(BOUNDARY_CELLS)
+  
+  # 5. Insufficient boundary cells ----
+  if (n_boundary < 2) {
+    warning("[Synora] Fewer than 2 boundary cells found (n = ", n_boundary, "). ",
+            "Distance2Boundary will be NA for all cells.",
+            call. = FALSE)
+    return(
+      INPUT %>%
+        dplyr::mutate(
+          Distance2Boundary = NA_real_,
+          Boundary_kNN_IDs  = list(NULL)
+        )
+    )
+  }
+  
+  k_eff <- min(K, n_boundary)
+  if (k_eff < K)
+    warning("[Synora] K = ", K, " but only ", n_boundary,
+            " boundary cells available. Using K = ", k_eff, ".",
+            call. = FALSE)
+  
+  # 6. kNN: query = non-boundary, reference = boundary ----
+  BOUNDARY_COORDS <- BOUNDARY_CELLS %>%
+    dplyr::select(dplyr::all_of(c(X_POSITION, Y_POSITION))) %>%
+    as.data.frame()
+  
+  QUERY_COORDS <- QUERY_CELLS %>%
+    dplyr::select(dplyr::all_of(c(X_POSITION, Y_POSITION))) %>%
+    as.data.frame()
+  
+  knn_result <- dbscan::kNN(
+    x     = BOUNDARY_COORDS,
+    query = QUERY_COORDS,
+    k     = k_eff
+  )
+  
+  boundary_ids <- BOUNDARY_CELLS[[CELL_ID_COLUMN]]
+  knn_cell_ids <- matrix(boundary_ids[knn_result$id],
+                         nrow = nrow(knn_result$id),
+                         ncol = ncol(knn_result$id))
+  
+  # 7. Assemble results ----
+  QUERY_RESULT <- QUERY_CELLS %>%
+    dplyr::mutate(
+      Distance2Boundary = rowMeans(knn_result$dist),
+      Boundary_kNN_IDs  = unname(as.list(as.data.frame(t(knn_cell_ids))))
+    )
+  
+  BOUNDARY_RESULT <- BOUNDARY_CELLS %>%
+    dplyr::mutate(
+      Distance2Boundary = 0,
+      Boundary_kNN_IDs  = list(NULL)
+    )
+  
+  RESULT <- dplyr::bind_rows(QUERY_RESULT, BOUNDARY_RESULT) %>%
+    { if (n_na > 0)
+      dplyr::bind_rows(.,
+                       INPUT_NA %>% dplyr::mutate(Distance2Boundary = NA_real_,
+                                                  Boundary_kNN_IDs  = list(NULL)))
+      else . } %>%
+    dplyr::arrange(match(!!as.name(CELL_ID_COLUMN), INPUT[[CELL_ID_COLUMN]]))
+  
+  # 8. Apply directionality ----
+  if (!is.null(DIRECTION)) {
+    
+    uncovered <- !is.na(RESULT[[ANNO_COLUMN]]) &
+      !(RESULT[[ANNO_COLUMN]] %in% ANNO_OF_BOUNDARY) &
+      RESULT[[ANNO_COLUMN]] != DIRECTION$negative &
+      RESULT[[ANNO_COLUMN]] != DIRECTION$positive
+    
+    if (any(uncovered)) {
+      uncovered_vals <- unique(RESULT[[ANNO_COLUMN]][uncovered])
+      warning("[Synora] ", sum(uncovered), " cell(s) with annotation(s) [",
+              paste(uncovered_vals, collapse = ", "),
+              "] are not covered by DIRECTION and not boundary. ",
+              "Their Distance2Boundary will be set to NA.",
+              call. = FALSE)
+    }
+    
     RESULT <- RESULT %>%
       dplyr::mutate(
         Distance2Boundary = dplyr::case_when(
-          .data[[ANNO_COLUMN]] == DIRECTION$negative ~ -Distance2Boundary,
-          .data[[ANNO_COLUMN]] == DIRECTION$positive ~ Distance2Boundary,
-          .data[[ANNO_COLUMN]] == ANNO_OF_BOUNDARY ~ Distance2Boundary,
-          T ~ Distance2Boundary
+          .data[[ANNO_COLUMN]] %in% ANNO_OF_BOUNDARY  ~  Distance2Boundary,
+          .data[[ANNO_COLUMN]] == DIRECTION$positive  ~  Distance2Boundary,
+          .data[[ANNO_COLUMN]] == DIRECTION$negative  ~ -Distance2Boundary,
+          TRUE                                        ~  NA_real_
         )
       )
   }
+  
   return(RESULT)
 }
-

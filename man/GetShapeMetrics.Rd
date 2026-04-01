@@ -8,189 +8,165 @@ GetShapeMetrics(
   INPUT,
   X_POSITION,
   Y_POSITION,
+  ANNO_COLUMN = "SynoraAnnotation",
   CELL_ID_COLUMN,
   CELL_ID_PREFIX,
-  ANNO_COLUMN = "SynoraAnnotation",
+  SAMPLE_COLUMN = NULL,
   ANNO_OF_BOUNDARY = "Boundary",
   ANNO_OF_NEST = "Nest",
-  SHAPE_METRICS = c("Boundary2NestRatio"),
-  SEPARATE_NESTS = F,
+  SHAPE_METRICS = "Boundary2NestRatio",
+  SEPARATE_NESTS = FALSE,
   DIST_THRESHOLD = Inf,
-  MIN_NEST_SIZE = 10
+  MIN_NEST_SIZE = 10,
+  WINDOW_SIZE = 500,
+  WINDOW_OVERLAP = 50,
+  LARGE_N_THRESHOLD = 10000,
+  CONCAVITY = 1.5,
+  MARGIN_DIST = 10,
+  MARGIN_TOLERANCE = 0.05,
+  BOUNDARY_RADIUS = 50,
+  SEED = 42
 )
 }
 \arguments{
-\item{INPUT}{A data frame containing cell coordinates and boundary annotations, where each row represents a cell in one single image.}
+\item{INPUT}{A data frame or named/unnamed list of data frames containing
+\code{SynoraAnnotation} output from \code{GetBoundary}.}
 
-\item{X_POSITION}{The name of the column containing the x-coordinates of the cells.}
+\item{X_POSITION}{Name of the X coordinate column.}
 
-\item{Y_POSITION}{The name of the column containing the y-coordinates of the cells.}
+\item{Y_POSITION}{Name of the Y coordinate column.}
 
-\item{CELL_ID_COLUMN}{The name of the column containing unique cell IDs.}
+\item{ANNO_COLUMN}{Annotation column name. Default \code{"SynoraAnnotation"}.}
 
-\item{ANNO_COLUMN}{The name of the column containing the boundary and nest annotations.}
+\item{CELL_ID_COLUMN}{(optional) Cell ID column name. Row indices used if
+omitted.}
 
-\item{ANNO_OF_BOUNDARY}{The name of boundary annotation derived from GetBoundary. Default is "Boundary".}
+\item{CELL_ID_PREFIX}{(optional) Prefix for auto-generated cell IDs.}
 
-\item{ANNO_OF_NEST}{The name of nest annotation derived from GetBoundary. Default is "Nest".}
+\item{SAMPLE_COLUMN}{(optional) Column name identifying samples within a
+single data frame. Default \code{NULL}.}
 
-\item{SHAPE_METRICS}{A vector of metrics to calculate. Options:
-\itemize{
-\item \code{Boundary2NestRatio}: Count ratio of boundary cells to nest cells (collective metric, only used when \code{SEPARATE_NESTS = FALSE})
-\item \code{NestSolidity}: Area ratio of concave hull to convex hull of nest cells
-\item \code{Nest2BoundaryDistCoV}: Coefficient of variation of distances from nest cells to nearest boundary cells
-\item \code{NestFractalDimension}: Slope of log(N(s)) ~ log(1/s) regression with box-counting method (1 = simple shape, 2 = complex shape)
-\item \code{NestClarkEvansIndex}: Observed nearest neighbor distance divided by expected distance in Poisson distribution (<1 = clustered, 1 = random, >1 = dispersed)
-}
-Default is "Boundary2NestRatio".}
+\item{ANNO_OF_BOUNDARY}{Annotation value(s) for boundary cells.
+Default \code{"Boundary"}. Auto-detects stratified variants
+(\code{"Boundary_Inner"} / \code{"Boundary_Outer"}) when
+\code{"Boundary"} is absent.}
 
-\item{SEPARATE_NESTS}{Analyze nests individually? When TRUE:
-\itemize{
-\item Performs nest separation using Voronoi tessellation
-\item Returns metrics per nest with \code{NestSize} and \code{NestIDs}
-\item Excludes \code{Boundary2NestRatio}
-\item Requires \code{DIST_THRESHOLD} and \code{MIN_NEST_SIZE} parameters
-}
-Default is FALSE}
+\item{ANNO_OF_NEST}{Annotation value for nest cells.
+Default \code{"Nest"}.}
 
-\item{DIST_THRESHOLD}{Maximum connection distance for nest clustering (only when \code{SEPARATE_NESTS = TRUE}).
-\itemize{
-\item Used only when \code{SEPARATE_NESTS = TRUE}
-\item Cells within this distance are considered connected
-\item Set to ~2× average cell spacing for biological tissues
-}}
+\item{SHAPE_METRICS}{Character vector of metrics to compute. Global metrics:
+\code{"Boundary2NestRatio"}, \code{"NestFragmentation"},
+\code{"NestDispersion"}, \code{"NestFractalDimension"}.
+Per-nest metrics (require \code{SEPARATE_NESTS = TRUE}):
+\code{"NestSolidity"}, \code{"BoundaryRoughness"},
+\code{"NestCompactness"}, \code{"NestElongation"},
+\code{"NestFractalDimension"}, \code{"BoundaryIntegrity"},
+\code{"NestBoundaryBalance"}, \code{"NestEnclosure"},
+\code{"NestBoundaryDensity"}.
+Default \code{"Boundary2NestRatio"}.}
 
-\item{MIN_NEST_SIZE}{Minimum number of cells required to qualify as a nest  (only when \code{SEPARATE_NESTS = TRUE}). Smaller clusters are ignored.}
+\item{SEPARATE_NESTS}{Logical; individualise nests via Delaunay graph
+components. Required for per-nest metrics. Default \code{FALSE}.}
+
+\item{DIST_THRESHOLD}{Maximum edge length in Delaunay triangulation used
+for nest separation. Default \code{Inf}.}
+
+\item{MIN_NEST_SIZE}{Minimum number of cells for a component to be
+considered a nest. Default \code{10}.}
+
+\item{WINDOW_SIZE}{Tile width/height for windowed Delaunay on large
+datasets. Default \code{500}.}
+
+\item{WINDOW_OVERLAP}{Overlap between adjacent tiles. Default \code{50}.}
+
+\item{LARGE_N_THRESHOLD}{Cell count above which windowed Delaunay is used.
+Default \code{10000}.}
+
+\item{CONCAVITY}{Concavity parameter passed to \code{concaveman}.
+Lower = tighter hull. Default \code{1.5}.}
+
+\item{MARGIN_DIST}{Distance threshold (same units as coordinates) for
+classifying hull vertices as touching the tissue margin.
+Default \code{10}.}
+
+\item{MARGIN_TOLERANCE}{Maximum fraction of hull vertices allowed near the
+margin for a nest to be classified as closed. Default \code{0.05}.}
+
+\item{BOUNDARY_RADIUS}{Search radius for associating boundary cells with a
+nest (used in closed-nest-only metrics). Default \code{50}.}
+
+\item{SEED}{Random seed for fractal dimension estimation. Default \code{42}.}
 }
 \value{
-A named list of calculated metrics. When \code{SEPARATE_NESTS = TRUE}, returns a list of lists containing metrics for each nest.
+A list (or named list of lists for multi-sample input) with:
+\describe{
+\item{Global}{One-row data frame of sample-level metrics.}
+\item{PerNest}{One-row-per-nest data frame. \code{NULL} when
+\code{SEPARATE_NESTS = FALSE}.}
+\item{HullMap}{Hull polygon vertices with all per-nest metrics joined.
+\code{NULL} when \code{SEPARATE_NESTS = FALSE}.}
+\item{CellMap}{Cell-to-nest ID mapping data frame.
+\code{NULL} when \code{SEPARATE_NESTS = FALSE}.}
+}
 }
 \description{
-Analyzes spatial organization of cell nests using metrics like nest/boundary ratios, solidity, and boundary distance variation.
+Compute shape and morphology metrics for tumour nests detected
+by \code{GetBoundary}. Supports the same three input modes as
+\code{GetBoundary} (list, data frame with \code{SAMPLE_COLUMN}, single
+data frame).
 }
 \examples{
-library(tidyverse)
-library(patchwork)
 library(Synora)
+data("DummyData")
 
-# Generate Dummy Data
-set.seed(123)
-DummyData <- tidyr::expand_grid(X = seq(-1, 1, length.out = 65),
-                                Y = seq(-1, 1, length.out = 65)) \%>\%
-  dplyr::nest_by(.key = 'Input') \%>\%
-  tidyr::expand_grid(R = c(0.6, 0.7, 0.8, 0.9),
-                     Sinusoid = c(0, 0.1, 0.2, 0.3, 0.4)) \%>\%
-  dplyr::rowwise() \%>\%
-  dplyr::mutate(Input = Input \%>\%
-                  dplyr::mutate(
-                    theta = 2 * atan(Y / (X + sqrt(X ^ 2 + Y ^ 2))),
-                    theta = ifelse(is.na(theta), pi, theta),
-                    CT = (X / R - Sinusoid * cos(theta) * sin(12 * theta)) ^ 2 +
-                      (Y / R - Sinusoid * sin(theta) * sin(12 * theta)) ^ 2 <
-                      (1 - Sinusoid) ^ 2) \%>\%
-                  dplyr::mutate(CT = ifelse(CT & (as.logical(runif(n = nrow(.)) \%/\% 0.75)), !CT, CT) \%>\%
-                                  as.numeric()) \%>\%
-                  dplyr::mutate(X = 250 * X + rnorm(n = nrow(.)),
-                                Y = 250 * Y + rnorm(n = nrow(.))) \%>\%
-                  dplyr::mutate(X = X \%>\% pmax(-250) \%>\% pmin(250),
-                                Y = Y \%>\% pmax(-250) \%>\% pmin(250)) \%>\%
-                  dplyr::mutate(Cell_ID = paste0('Cell_', sprintf('\%05.f', dplyr::row_number()))) \%>\%
-                  list())
-set.seed(NULL)
+anno_list <- GetBoundary(
+  INPUT                = DummyData,
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  RADIUS               = 20,
+  NEST_SPECIFICITY     = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
 
-# Run GetBoundary
-Results <- DummyData \%>\%
-  dplyr::mutate(BoundaryResult =
-                  Synora::GetBoundary(
-                    INPUT = Input,
-                    X_POSITION = 'X',
-                    Y_POSITION = 'Y',
-                    ANNO_COLUMN = 'CT',
-                    CELL_ID_COLUMN = 'Cell_ID',
-                    RADIUS = 20,
-                    NEST_SPECIFICITY = 0.25,
-                    BOUNDARY_SPECIFICITY = 0.05
-                  ) \%>\%
-                  list()
-  )
-# Run GetShapeMetrics
-Results <- Results \%>\%
-  dplyr::mutate(ShapeMetrics =
-                  Synora::GetShapeMetrics(
-                    INPUT = BoundaryResult,
-                    CELL_ID_COLUMN = 'Cell_ID',
-                    X_POSITION = 'X',
-                    Y_POSITION = 'Y',
-                    ANNO_COLUMN = 'SynoraAnnotation',
-                    ANNO_OF_BOUNDARY = 'Boundary',
-                    ANNO_OF_NEST = 'Nest',
-                    SHAPE_METRICS = c('Boundary2NestRatio', 'Nest2BoundaryDistCoV', 'NestSolidity', 'NestFractalDimension', 'NestClarkEvansIndex')
-                  ) \%>\%
-                  list()
-  )
+# --- List mode — global metrics across samples -----------
+shape_list <- GetShapeMetrics(
+  INPUT          = anno_list,
+  X_POSITION     = "X",
+  Y_POSITION     = "Y",
+  CELL_ID_COLUMN = "Cell_ID",
+  SHAPE_METRICS  = c("Boundary2NestRatio", "NestFragmentation")
+)
+# Each element has $Global and $PerNest slots
+shape_list[["Sample1"]]$Global
 
-# Visualization
+# --- Single data frame — per-nest metrics ----------------
+shape_single <- GetShapeMetrics(
+  INPUT          = anno_list[[1]],
+  X_POSITION     = "X",
+  Y_POSITION     = "Y",
+  CELL_ID_COLUMN = "Cell_ID",
+  SHAPE_METRICS  = c("NestSolidity", "NestCompactness",
+                      "BoundaryRoughness"),
+  SEPARATE_NESTS = TRUE
+)
+shape_single$Global
+shape_single$PerNest[, c("Nest_ID", "NestSize", "NestSolidity",
+                          "NestCompactness")]
 
-p <- patchwork::wrap_plots(
-  nrow = 2,
-  Results \%>\%
-    dplyr::select(Input, R, Sinusoid) \%>\%
-    tidyr::unnest(Input) \%>\%
-    ggplot(aes(X, Y, color = as.factor(CT))) +
-    facet_grid(R ~ Sinusoid) +
-    geom_point(size = 1) +
-    scale_color_manual(name = 'Cell Type',
-                       values = c(`0` = '#e9c46a', `1` = '#046C9A'),
-                       labels = c('Non-tumor cell', 'Tumor cell')) +
-    labs(title = 'Cell Type') +
-    theme_void() +
-    coord_equal(),
-  Results \%>\%
-    dplyr::select(BoundaryResult, R, Sinusoid) \%>\%
-    tidyr::unnest(BoundaryResult) \%>\%
-    dplyr::mutate(BoundaryScore = pmin(BoundaryScore, 0.5)) \%>\%
-    ggplot(aes(X, Y, color = BoundaryScore)) +
-    facet_grid(R ~ Sinusoid) +
-    geom_point(size = 1) +
-    scale_color_gradient2(low = '#046C9A',
-                          mid = '#FFFFFF',
-                          high = '#CB2314',
-                          midpoint = 0.25,
-                          limits = c(0, 0.5),
-                          name = "Boundary Score") +
-    labs(title = "Boundary Score") +
-    theme_void() +
-    coord_equal(),
-  Results \%>\%
-    dplyr::select(BoundaryResult, R, Sinusoid) \%>\%
-    tidyr::unnest(BoundaryResult) \%>\%
-    ggplot(aes(X, Y, color = factor(SynoraAnnotation))) +
-    facet_grid(R ~ Sinusoid) +
-    geom_point(size = 1) +
-    scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
-                       name = "Synora Annotation") +
-    labs(title = "Synora Annotation") +
-    theme_void() +
-    coord_equal(),
-  Results \%>\%
-    dplyr::select(ShapeMetrics, R, Sinusoid) \%>\%
-    dplyr::mutate(ShapeMetrics \%>\%
-                    dplyr::as_tibble()) \%>\%
-    dplyr::select(-c(ShapeMetrics)) \%>\%
-    dplyr::ungroup() \%>\%
-    tidyr::pivot_longer(cols = !c(R, Sinusoid), names_to = 'ShapeMetric', values_to = 'Value') \%>\%
-    dplyr::nest_by(ShapeMetric) \%>\%
-    dplyr::mutate(plot = {data \%>\%
-        ggplot(aes(Sinusoid, R, fill = Value)) +
-        geom_tile() +
-        geom_text(aes(label = sprintf('\%.2f', Value))) +
-        labs(title = ShapeMetric) +
-        theme_void() +
-        scale_fill_gradient2(high = '#CB2314', guide = 'none') +
-        coord_fixed(ratio = 1)} \%>\%
-          list()) \%>\%
-    dplyr::pull(plot) \%>\%
-    patchwork::wrap_plots()) +
-  patchwork::plot_layout(guides = "collect")
-print(p)
+# --- Closure classification + hull map -------------------
+shape_closure <- GetShapeMetrics(
+  INPUT             = anno_list[[1]],
+  X_POSITION        = "X",
+  Y_POSITION        = "Y",
+  CELL_ID_COLUMN    = "Cell_ID",
+  SHAPE_METRICS     = "NestEnclosure",
+  SEPARATE_NESTS    = TRUE,
+  MARGIN_DIST       = 10,
+  MARGIN_TOLERANCE  = 0.05
+)
+table(shape_closure$PerNest$IsClosedNest)
+head(shape_closure$HullMap)   # polygon vertices ready for ggplot2
+
 }

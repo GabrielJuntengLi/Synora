@@ -8,143 +8,153 @@ GetDist2Boundary(
   INPUT,
   X_POSITION,
   Y_POSITION,
+  ANNO_COLUMN = "SynoraAnnotation",
   CELL_ID_COLUMN,
   CELL_ID_PREFIX,
-  ANNO_COLUMN = "SynoraAnnotation",
+  SAMPLE_COLUMN = NULL,
   ANNO_OF_BOUNDARY = "Boundary",
-  DIRECTION = list(negative = "Outside", positive = "Nest"),
-  K = 5
+  K = 5,
+  DIRECTION = list(negative = "Outside", positive = "Nest")
 )
 }
 \arguments{
-\item{INPUT}{Input data frame containing cell coordinates and boundary annotations, where each row represents a cell in one single image.}
+\item{INPUT}{A data frame or a named/unnamed list of data frames.}
 
-\item{X_POSITION}{Name of X coordinate column.}
+\item{X_POSITION}{Name of the X coordinate column.}
 
-\item{Y_POSITION}{Name of Y coordinate column.}
+\item{Y_POSITION}{Name of the Y coordinate column.}
 
-\item{CELL_ID_COLUMN}{(optional) Cell ID column. If not provided, row indices will be used as cell IDs. Default NULL.}
+\item{ANNO_COLUMN}{Name of the annotation column containing boundary labels.
+Default \code{"SynoraAnnotation"}.}
 
-\item{CELL_ID_PREFIX}{(optional) Cell ID prefix used for creating cell IDs. Default NULL.}
+\item{CELL_ID_COLUMN}{(optional) Cell ID column name. Row indices are used
+if omitted.}
 
-\item{ANNO_COLUMN}{Name of annotation column containing boundary annotation. Default is "SynoraAnnotation".}
+\item{CELL_ID_PREFIX}{(optional) Prefix for auto-generated cell IDs.}
 
-\item{ANNO_OF_BOUNDARY}{Annotation value representing boundaries. Default is "Boundary".}
+\item{SAMPLE_COLUMN}{(optional) Column name identifying samples within a
+single data frame. Default \code{NULL}.}
 
-\item{DIRECTION}{Named list specifying direction mapping with:
+\item{ANNO_OF_BOUNDARY}{Annotation value(s) representing boundary cells.
+Accepts a character scalar or vector, e.g.
+\code{c("Boundary_Inner", "Boundary_Outer")} for stratified output.
+Default \code{"Boundary"}. Auto-detection rules:
 \itemize{
-\item \code{negative}: Annotation value for negative direction (default: 'Outside')
-\item \code{positive}: Annotation value for positive direction (default: 'Nest')
-}
-Set to \code{NULL} to ignore directionality}
+\item If \code{"Boundary"} is not found but both stratified variants are
+present, both are used automatically.
+\item If only one stratified variant is present, only that one is used.
+\item If an explicit vector is supplied and only some values are absent
+in a given sample (common in multi-sample runs), the missing values
+are dropped with a warning and processing continues.
+\item If \emph{all} supplied values are absent, the function stops with
+an error.
+}}
 
-\item{K}{Number of nearest boundary neighbors to consider. Default is 5.}
+\item{K}{Number of nearest boundary neighbors whose distances are averaged.
+Default \code{5}.}
+
+\item{DIRECTION}{Named list with elements \code{negative} and
+\code{positive} specifying which annotation values receive negative /
+positive signed distances respectively. Set to \code{NULL} to return
+unsigned distances for all cells. Default
+\code{list(negative = "Outside", positive = "Nest")}.}
 }
 \value{
-A data frame with the following columns:
+All original INPUT columns are preserved. \code{GetDist2Boundary} appends:
 \describe{
-\item{CELL_ID}{Cell ID column.}
-\item{X_POSITION}{X coordinate column.}
-\item{Y_POSITION}{Y coordinate column.}
-\item{ANNO_COLUMN}{Cell annotation column containing boundary cells.}
-\item{Distance2Boundary}{Euclidean distance to boundary cell(s) (could be negative if DIRECTION applied).}
+\item{Distance2Boundary}{Mean Euclidean distance to the K nearest boundary
+cells. Signed if \code{DIRECTION} is set. Boundary cells receive
+\code{0}. Cells whose annotation is not covered by \code{DIRECTION}
+(e.g. Noise) receive \code{NA}. Cells with \code{NA} in
+\code{ANNO_COLUMN} receive \code{NA}.}
+\item{Boundary_kNN_IDs}{List-column of length K containing the cell IDs
+of the nearest boundary neighbors. \code{NULL} for boundary cells and
+cells excluded from analysis.}
 }
 }
 \description{
-Calculate Distance to Boundary with Directionality
+Calculate the distance of each cell to the nearest boundary
+cell(s), with optional signed directionality.
+
+Supports three input modes (mirroring \code{GetBoundary}):
+\enumerate{
+\item A \strong{list of data frames} — processed per element, returns a
+named list of data frames.
+\item A \strong{single data frame with \code{SAMPLE_COLUMN}} — split by
+sample, processed independently, returns one reassembled data frame.
+\item A \strong{single data frame without \code{SAMPLE_COLUMN}} — treated
+as one sample, returns one data frame.
+}
 }
 \examples{
-library(tidyverse)
-library(patchwork)
 library(Synora)
+data("DummyData")
 
-# Generate Dummy Data
-set.seed(123)
-DummyData <- tidyr::expand_grid(X = seq(-1, 1, length.out = 65),
-                                Y = seq(-1, 1, length.out = 65)) \%>\%
-  dplyr::mutate(R = 0.8,
-                Sinusoid = 0.4,
-                theta = 2 * atan(Y / (X + sqrt(X ^ 2 + Y ^ 2))),
-                theta = ifelse(is.na(theta), pi, theta),
-                CT = (X / R - Sinusoid * cos(theta) * sin(12 * theta)) ^ 2 +
-                  (Y / R - Sinusoid * sin(theta) * sin(12 * theta)) ^ 2 < 1) \%>\%
-  dplyr::mutate(CT = ifelse(CT & (as.logical(runif(n = nrow(.)) \%/\% 0.75)), !CT, CT) \%>\%
-                  as.numeric()) \%>\%
-  dplyr::mutate(X = 250 * X + rnorm(n = nrow(.)),
-                Y = 250 * Y + rnorm(n = nrow(.))) \%>\%
-  dplyr::mutate(X = X \%>\% pmax(-250) \%>\% pmin(250),
-                Y = Y \%>\% pmax(-250) \%>\% pmin(250)) \%>\%
-  dplyr::mutate(Cell_ID = paste0('Cell_', sprintf('\%05.f', dplyr::row_number())))
-set.seed(NULL)
-
-# Run GetBoundary
-BoundaryResult <- Synora::GetBoundary(
-  INPUT = DummyData,
-  X_POSITION = 'X',
-  Y_POSITION = 'Y',
-  ANNO_COLUMN = 'CT',
-  CELL_ID_COLUMN = 'Cell_ID',
-  RADIUS = 20,
-  NEST_SPECIFICITY = 0.25,
+# First annotate boundaries
+anno_list <- GetBoundary(
+  INPUT                = DummyData,
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  RADIUS               = 20,
+  NEST_SPECIFICITY     = 0.25,
   BOUNDARY_SPECIFICITY = 0.05
 )
 
-# Run GetDist2Boundary
-LayerResult <- Synora::GetDist2Boundary(
-  INPUT = BoundaryResult,
-  CELL_ID_COLUMN = 'Cell_ID',
-  X_POSITION = 'X',
-  Y_POSITION = 'Y',
-  ANNO_COLUMN = 'SynoraAnnotation',
-  ANNO_OF_BOUNDARY = 'Boundary'
+# --- List mode (mirrors GetBoundary list output) ---------
+dist_list <- GetDist2Boundary(
+  INPUT          = anno_list,
+  X_POSITION     = "X",
+  Y_POSITION     = "Y",
+  CELL_ID_COLUMN = "Cell_ID",
+  K              = 5
+)
+# Each element gains Distance2Boundary and Boundary_kNN_IDs
+summary(dist_list[["Sample1"]]$Distance2Boundary)
+
+# --- Single data frame, signed distances -----------------
+dist_single <- GetDist2Boundary(
+  INPUT          = anno_list[[1]],
+  X_POSITION     = "X",
+  Y_POSITION     = "Y",
+  CELL_ID_COLUMN = "Cell_ID",
+  K              = 5,
+  DIRECTION      = list(negative = "Outside", positive = "Nest")
+)
+hist(dist_single$Distance2Boundary,
+     main = "Signed Distance to Boundary", xlab = "Distance")
+
+# --- Unsigned distances for all cells --------------------
+dist_unsigned <- GetDist2Boundary(
+  INPUT          = anno_list[[1]],
+  X_POSITION     = "X",
+  Y_POSITION     = "Y",
+  CELL_ID_COLUMN = "Cell_ID",
+  K              = 3,
+  DIRECTION      = NULL          # no sign applied
 )
 
-# Visualization
-p <- patchwork::wrap_plots(
-  nrow = 2,
-  DummyData \%>\%
-    ggplot(aes(X, Y, color = as.factor(CT))) +
-    geom_point(size = 1) +
-    scale_color_manual(name = 'Cell Type',
-                       values = c(`0` = '#e9c46a', `1` = '#046C9A'),
-                       labels = c('Non-tumor cell', 'Tumor cell')) +
-    labs(title = 'Cell Type') +
-    theme_void() +
-    coord_equal(),
-  BoundaryResult \%>\%
-    dplyr::mutate(BoundaryScore = pmin(BoundaryScore, 0.5)) \%>\%
-    ggplot(aes(X, Y, color = BoundaryScore)) +
-    geom_point(size = 1) +
-    scale_color_gradient2(low = '#046C9A',
-                          mid = '#FFFFFF',
-                          high = '#CB2314',
-                          midpoint = 0.25,
-                          limits = c(0, 0.5),
-                          name = "Boundary Score") +
-    labs(title = "Boundary Score") +
-    theme_void() +
-    coord_equal(),
-  BoundaryResult \%>\%
-    ggplot(aes(X, Y, color = factor(SynoraAnnotation))) +
-    geom_point(size = 1) +
-    scale_color_manual(values = c(Boundary = '#4DAF4AFF', Nest = '#377EB8FF', Outside = '#984EA3FF'),
-                       name = "Synora Annotation") +
-    labs(title = "Synora Annotation") +
-    theme_void() +
-    coord_equal(),
-  LayerResult \%>\%
-    dplyr::mutate(Distance2Boundary = Distance2Boundary \%>\% scales::rescale_mid(c(-1, 1), mid = 0)) \%>\%
-    ggplot(aes(X, Y, color = Distance2Boundary)) +
-    geom_point(size = 1) +
-    scale_color_gradient2(low = '#046C9A',
-                          mid = '#FFFFFF',
-                          high = '#CB2314',
-                          midpoint = 0,
-                          limits = c(-1, 1),
-                          name = "Distance to Boundary") +
-    labs(title = "Distance to Boundary") +
-    theme_void() +
-    coord_equal()) +
-  patchwork::plot_layout(guides = "collect")
-print(p)
+# --- Stratified boundary (Boundary_Inner / Boundary_Outer)
+anno_strat <- GetBoundary(
+  INPUT                = DummyData[[1]],
+  CELL_ID_COLUMN       = "Cell_ID",
+  X_POSITION           = "X",
+  Y_POSITION           = "Y",
+  ANNO_COLUMN          = "CT",
+  RADIUS               = 20,
+  STRATIFY_BOUNDARY    = TRUE,
+  NEST_SPECIFICITY     = 0.25,
+  BOUNDARY_SPECIFICITY = 0.05
+)
+dist_strat <- GetDist2Boundary(
+  INPUT              = anno_strat,
+  X_POSITION         = "X",
+  Y_POSITION         = "Y",
+  CELL_ID_COLUMN     = "Cell_ID",
+  ANNO_OF_BOUNDARY   = c("Boundary_Inner", "Boundary_Outer"),
+  K                  = 5
+)
+table(dist_strat$SynoraAnnotation, is.na(dist_strat$Distance2Boundary))
+
 }

@@ -193,6 +193,7 @@ ShapeResultList <- BoundaryResultList %>%
     SEPARATE_NESTS   = TRUE,
     DIST_THRESHOLD   = 60,
     MIN_NEST_SIZE    = 10,
+    CONCAVITY = 1,
     MARGIN_DIST      = 50,    # cells within 50 units of tissue edge = "touching margin"
     MARGIN_TOLERANCE = 0.05,  # ≤5% touching → nest is closed
     BOUNDARY_RADIUS  = 50     # search radius for boundary-cell association
@@ -221,7 +222,7 @@ for (i in seq_along(DummyData)) {
     ggplot2::geom_point(size = 1) +
     ggplot2::scale_color_manual(
       name   = "Cell Type",
-      values = c(`0` = "#e9c46a", `1` = "#046C9A"),
+      values = c(`0` = "#B9C7E2", `1` = "#DE7424"),
       labels = c("Non-tumor cell", "Tumor cell")
     ) +
     ggplot2::theme_void() +
@@ -232,8 +233,8 @@ for (i in seq_along(DummyData)) {
     ggplot2::ggplot(ggplot2::aes(X, Y, color = factor(SynoraAnnotation))) +
     ggplot2::geom_point(size = 1) +
     ggplot2::scale_color_manual(
-      values = c(Boundary = "#4DAF4AFF", Nest = "#377EB8FF",
-                 Outside  = "#984EA3FF"),
+      values = c(Boundary = "#5B6530", Boundary_Inner = "#5B6530", Boundary_Outer = "#F1C100", 
+                 Nest = "#ECAB99", Outside  = "#BFB5D0"),
       name   = "Synora Annotation"
     ) +
     ggplot2::theme_void() +
@@ -284,7 +285,7 @@ ShapePlotList <- PlotShapeMetrics(
 )
 
 # Print one sample
-print(ShapePlotList[["Perlin_0.005"]])
+patchwork::wrap_plots(ShapePlotList, nrow = 1)
 
 # Spatial panel only
 PlotShapeMetrics(

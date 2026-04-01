@@ -60,6 +60,75 @@
 #'   \item{SynoraAnnotation}{Factor annotation (see \code{STRATIFY_BOUNDARY}).
 #'     Cells with missing \code{ANNO_COLUMN} values receive \code{NA}.}
 #' }
+#' 
+#' @examples
+#' library(Synora)
+#' data("DummyData")
+#'
+#' # --- Single data frame (no SAMPLE_COLUMN) ----------------
+#' result_single <- GetBoundary(
+#'   INPUT                = DummyData[[1]],
+#'   CELL_ID_COLUMN       = "Cell_ID",
+#'   X_POSITION           = "X",
+#'   Y_POSITION           = "Y",
+#'   ANNO_COLUMN          = "CT",
+#'   RADIUS               = 20,
+#'   NEST_SPECIFICITY     = 0.25,
+#'   BOUNDARY_SPECIFICITY = 0.05
+#' )
+#' head(result_single[, c("Cell_ID", "SynoraAnnotation", "BoundaryScore")])
+#'
+#' # --- List of data frames (batch mode) --------------------
+#' result_list <- GetBoundary(
+#'   INPUT                = DummyData,          # named list
+#'   CELL_ID_COLUMN       = "Cell_ID",
+#'   X_POSITION           = "X",
+#'   Y_POSITION           = "Y",
+#'   ANNO_COLUMN          = "CT",
+#'   RADIUS               = 20,
+#'   NEST_SPECIFICITY     = 0.25,
+#'   BOUNDARY_SPECIFICITY = 0.05
+#' )
+#' # result_list is a named list; access individual samples:
+#' table(result_list[["Sample1"]]$SynoraAnnotation)
+#'
+#' # --- Single data frame WITH SAMPLE_COLUMN ----------------
+#' combined_df <- do.call(rbind, lapply(
+#'   names(DummyData),
+#'   function(nm) { d <- DummyData[[nm]]; d$Sample <- nm; d }
+#' ))
+#' result_combined <- GetBoundary(
+#'   INPUT                = combined_df,
+#'   SAMPLE_COLUMN        = "Sample",
+#'   CELL_ID_COLUMN       = "Cell_ID",
+#'   X_POSITION           = "X",
+#'   Y_POSITION           = "Y",
+#'   ANNO_COLUMN          = "CT",
+#'   RADIUS               = 20,
+#'   NEST_SPECIFICITY     = 0.25,
+#'   BOUNDARY_SPECIFICITY = 0.05
+#' )
+#' # Returns one reassembled data frame retaining the Sample column
+#' table(result_combined$Sample, result_combined$SynoraAnnotation)
+#'
+#' # --- KNN neighborhood + Otsu midpoint (continuous anno) --
+#' result_knn <- GetBoundary(
+#'   INPUT                = DummyData[[1]],
+#'   CELL_ID_COLUMN       = "Cell_ID",
+#'   X_POSITION           = "X",
+#'   Y_POSITION           = "Y",
+#'   ANNO_COLUMN          = "CT",
+#'   NEIGHBOR_METHOD      = "knn",
+#'   KNN_K                = 10,
+#'   ANNO_RANGE           = "auto",
+#'   ANNO_MIDPOINT        = "auto",   # Otsu thresholding
+#'   NEST_SPECIFICITY     = 0.25,
+#'   BOUNDARY_SPECIFICITY = 0.05,
+#'   STRATIFY_BOUNDARY    = TRUE,
+#'   VERBOSE              = TRUE
+#' )
+#' table(result_knn$SynoraAnnotation)
+#'
 #' @export
 #' @importFrom magrittr `%>%`
 GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
@@ -240,7 +309,8 @@ GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
   if (length(existing_synora) > 0) {
     warning("Overwriting existing Synora column(s): \033[1;4;43m[",
             paste(existing_synora, collapse = ", "),
-            "]\033[0m. Check if GetBoundary has already been run on this data.")
+            "]\033[0m. Check if GetBoundary has already been run on this data.",
+            call. = FALSE)
     INPUT <- INPUT %>% dplyr::select(-dplyr::all_of(existing_synora))
   }
   
@@ -341,8 +411,6 @@ GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
     KNN_K           = KNN_K
   )
   
-  ANNO_DENOISED <- paste0(ANNO_COLUMN, "_denoised")
-  
   # 3. Core logic ----
   if (DENOISE) {
     
@@ -388,12 +456,15 @@ GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
         BoundaryScore    = Mixedness * Orientedness,
         SynoraAnnotation = dplyr::case_when(
           BoundaryScore >= BOUNDARY_SPECIFICITY                                    ~ "Boundary",
-          BoundaryScore <  BOUNDARY_SPECIFICITY & !!as.name(ANNO_DENOISED) ==  1  ~ "Nest",
-          BoundaryScore <  BOUNDARY_SPECIFICITY & !!as.name(ANNO_DENOISED) == -1  ~ "Outside",
+          BoundaryScore <  BOUNDARY_SPECIFICITY & !!as.name(ANNO_DENOISED) ==  1   ~ "Nest",
+          BoundaryScore <  BOUNDARY_SPECIFICITY & !!as.name(ANNO_DENOISED) == -1   ~ "Outside",
           TRUE                                                                     ~ "Noise"
         ) %>% factor(levels = c("Boundary", "Nest", "Outside", "Noise"))
       ) %>%
-      dplyr::select(-dplyr::all_of(ANNO_DENOISED))
+      dplyr::select(
+        dplyr::all_of(c(CELL_ID_COLUMN, X_POSITION, Y_POSITION)),
+        Nb_Count, Mixedness, Orientedness, BoundaryScore, SynoraAnnotation
+      )
     
   } else {
     
@@ -407,24 +478,24 @@ GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
           TRUE                                         ~ "Outside"
         ) %>% factor(levels = c("Boundary", "Nest", "Outside", "Noise"))
       ) %>%
-      dplyr::select(-dplyr::all_of(ANNO_SCALED))
+      dplyr::select(
+        dplyr::all_of(c(CELL_ID_COLUMN, X_POSITION, Y_POSITION)),
+        Nb_Count, Mixedness, Orientedness, BoundaryScore, SynoraAnnotation
+      )
   }
   
   # 4. Final assembly ----
   JOIN_KEY <- c(CELL_ID_COLUMN, X_POSITION, Y_POSITION)
   
-  RESULT_CLEAN <- dplyr::left_join(INPUT_CLEAN, RESULT, by = JOIN_KEY) %>%
-    dplyr::transmute(
-      !!as.name(CELL_ID_COLUMN),
-      !!as.name(X_POSITION),
-      !!as.name(Y_POSITION),
-      !!as.name(ANNO_COLUMN), 
-      Nb_Count,
+  RESULT_CLEAN <- INPUT_CLEAN %>%
+    dplyr::select(-dplyr::all_of(ANNO_SCALED)) %>% 
+    dplyr::left_join(RESULT, by = JOIN_KEY) %>%
+    dplyr::mutate(
       Anno_Midpoint = ANNO_MIDPOINT,
+      Nb_Count      = Nb_Count,
       Mixedness     = ifelse(is.na(Mixedness),     0, Mixedness),
       Orientedness  = ifelse(is.na(Orientedness),  0, Orientedness),
-      BoundaryScore = ifelse(is.na(BoundaryScore), 0, BoundaryScore),
-      SynoraAnnotation
+      BoundaryScore = ifelse(is.na(BoundaryScore), 0, BoundaryScore)
     )
   
   if (STRATIFY_BOUNDARY) {
@@ -433,13 +504,15 @@ GetBoundary <- function(INPUT, X_POSITION, Y_POSITION,
   
   if (n_na > 0) {
     final_levels <- levels(RESULT_CLEAN$SynoraAnnotation)
-    RESULT_FINAL <- dplyr::left_join(
-      INPUT_FULL %>%
-        dplyr::select(dplyr::all_of(c(CELL_ID_COLUMN, X_POSITION,
-                                      Y_POSITION, ANNO_COLUMN))),
-      RESULT_CLEAN,
-      by = c(CELL_ID_COLUMN, X_POSITION, Y_POSITION, ANNO_COLUMN)
-    ) %>%
+    RESULT_FINAL <- INPUT_FULL %>%
+      dplyr::left_join(
+        RESULT_CLEAN %>%
+          dplyr::select(dplyr::all_of(c(JOIN_KEY,
+                                        "Nb_Count", "Anno_Midpoint",
+                                        "Mixedness", "Orientedness",
+                                        "BoundaryScore", "SynoraAnnotation"))),
+        by = JOIN_KEY
+      ) %>%
       dplyr::mutate(
         SynoraAnnotation = factor(SynoraAnnotation, levels = final_levels)
       )
